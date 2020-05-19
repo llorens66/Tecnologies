@@ -1,0 +1,657 @@
+---
+title: "Tecnologies"
+author: "Llorens"
+date: "8/12/2019"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+library(reticulate)
+library(tidyverse)
+library(data.table)
+library(repurrrsive)
+library(varhandle)
+library(zoo)
+library(caret)
+library(reshape2)
+library(caTools)
+library(e1071)
+library(naivebayes)
+library(rpart)
+library(randomForest)
+library(xgboost)
+library(rrcov)
+library(kernlab)
+```
+
+# Motivation: Clash Royale
+
+As I am a big fan of Clash Royale I am going to analyse the dynamics of this mobile game. 
+
+First of all, from wikipedia : "Clash Royale is a freemium real-time strategy video game developed and published by Supercell. The game combines elements from collectible card games, tower defense, and multiplayer online battle arena."
+
+In order to achive this analysis succesfully I would split this document in the following parts: Data collecting, Data wrangling or Data processing, Exploratory Data Analysis, Modelling and conclusions.  
+
+In this analysis I expect to show the usage of the cards and its winrate in the "Ladder" encounters. It is also interesting find out the interaction beetween cards.
+
+Also, as I am a "Golem" player I will make a predictive model to predict the edge against other cards.
+
+Finally I will make a predictive model in order to predict the number of crowns you can get depending the cards you play.  
+
+The source where I get the data: https://developer.clashroyale.com/#/
+
+# Data collecting
+
+I will not extend much explaining this part as is more interesting what comes later. 
+
+The data comes from an API, so there is the need to set up an account there and make a token verification. A token verification  is a string you posses as an authorization to log in to a web an API, whatever it request. It is like your signature to be recorded.
+
+From the API i want to get a battle log, that is a record of the battles that players have done. The API has its limitations, for example you can not request all the battles you like for a player, just the last 24. Also, you just can ask for 1000 player tags (players identification). Knowing this thought about how I am going to get the data. So, I will make three requests: 
+
+- A players list
+
+- A battle log
+
+- Cards list
+
+I will make the requests in python as its been easier for me to connect to the API.
+
+```{python}
+
+#import requests
+#import json
+#import pandas as pd
+
+# Players list
+
+#v1_url_ranking = "https://api.clashroyale.com/v1/locations/global/rankings/players"
+#header1_Accept = "application/json"
+#v2_header2_token = "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiIsImtpZCI6IjI4YTMxOGY3LTAwMDAtYTFlYi03ZmExLTJjNzQzM2M2Y2NhNSJ9.eyJpc3MiOiJzdXBlcmNlbGwiLCJhdWQiOiJzdXBlcmNlbGw6Z2FtZWFwaSIsImp0aSI6IjVkNzFiYWU4LTVjZTQtNGRlMS1iOTNjLTk4OGYzNWJmZjI4MyIsImlhdCI6MTU3NzYzMzA1OCwic3ViIjoiZGV2ZWxvcGVyL2U0ZmE0MTQ4LTZkNmUtY2VkNS1hOTBmLWVmNmI4YmZhOGMyMyIsInNjb3BlcyI6WyJyb3lhbGUiXSwibGltaXRzIjpbeyJ0aWVyIjoiZGV2ZWxvcGVyL3NpbHZlciIsInR5cGUiOiJ0aHJvdHRsaW5nIn0seyJjaWRycyI6WyI4MC4zOS4yMi4yNDgiXSwidHlwZSI6ImNsaWVudCJ9XX0.NZrKTdOBFUUupkaeA2HC44-PPoSP2fPkaGtrDs0gnT4qox_PHcqABoQAaBo2SQnTvjWD4vX_7Cuq_EJC-98oMA"
+#num_players = 1000
+
+#r1 = requests.get(v1_url_ranking, headers={"Accept":header1_Accept, "authorization":v2_header2_token}, params = {"limit":num_players})
+#t1 = json.loads(json.dumps(r1.json(), indent = 2)) # codigo json
+#players_list = pd.DataFrame.from_dict(t1["items"]).loc[:,["tag"]]
+#players_list = players_list.values.tolist()
+
+```
+
+```{python}
+# Battle log
+
+#battle_log_acum = pd.DataFrame()
+
+#for i in players_list:
+    #tag_player = str(i)[3:-2]
+    #v1_url_tag = "https://api.clashroyale.com/v1/players/%23"+tag_player+"/battlelog"
+    #header1_Accept = "application/json"
+    #v2_header2_token = "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiIsImtpZCI6IjI4YTMxOGY3LTAwMDAtYTFlYi03ZmExLTJjNzQzM2M2Y2NhNSJ9.eyJpc3MiOiJzdXBlcmNlbGwiLCJhdWQiOiJzdXBlcmNlbGw6Z2FtZWFwaSIsImp0aSI6IjVkNzFiYWU4LTVjZTQtNGRlMS1iOTNjLTk4OGYzNWJmZjI4MyIsImlhdCI6MTU3NzYzMzA1OCwic3ViIjoiZGV2ZWxvcGVyL2U0ZmE0MTQ4LTZkNmUtY2VkNS1hOTBmLWVmNmI4YmZhOGMyMyIsInNjb3BlcyI6WyJyb3lhbGUiXSwibGltaXRzIjpbeyJ0aWVyIjoiZGV2ZWxvcGVyL3NpbHZlciIsInR5cGUiOiJ0aHJvdHRsaW5nIn0seyJjaWRycyI6WyI4MC4zOS4yMi4yNDgiXSwidHlwZSI6ImNsaWVudCJ9XX0.NZrKTdOBFUUupkaeA2HC44-PPoSP2fPkaGtrDs0gnT4qox_PHcqABoQAaBo2SQnTvjWD4vX_7Cuq_EJC-98oMA"
+    #num_bat = 30
+    #r2 = requests.get(v1_url_tag, headers={"Accept":header1_Accept, "authorization":v2_header2_token}, params = {"limit":num_bat})
+    #t2 = json.loads(json.dumps(r2.json(), indent = 2))
+    #battle_log = pd.DataFrame(t2)
+    #battle_log_acum = battle_log_acum.append(battle_log)
+
+```
+
+```{python}
+# battle_log_acum.to_csv("battle_log_acum_08122019.csv") 
+```
+
+```{python}
+# Cards
+
+#v1_url_cards = "https://api.clashroyale.com/v1/cards"
+#header1_Accept = "application/json"
+#v2_header2_token = "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiIsImtpZCI6IjI4YTMxOGY3LTAwMDAtYTFlYi03ZmExLTJjNzQzM2M2Y2NhNSJ9.eyJpc3MiOiJzdXBlcmNlbGwiLCJhdWQiOiJzdXBlcmNlbGw6Z2FtZWFwaSIsImp0aSI6IjVkNzFiYWU4LTVjZTQtNGRlMS1iOTNjLTk4OGYzNWJmZjI4MyIsImlhdCI6MTU3NzYzMzA1OCwic3ViIjoiZGV2ZWxvcGVyL2U0ZmE0MTQ4LTZkNmUtY2VkNS1hOTBmLWVmNmI4YmZhOGMyMyIsInNjb3BlcyI6WyJyb3lhbGUiXSwibGltaXRzIjpbeyJ0aWVyIjoiZGV2ZWxvcGVyL3NpbHZlciIsInR5cGUiOiJ0aHJvdHRsaW5nIn0seyJjaWRycyI6WyI4MC4zOS4yMi4yNDgiXSwidHlwZSI6ImNsaWVudCJ9XX0.NZrKTdOBFUUupkaeA2HC44-PPoSP2fPkaGtrDs0gnT4qox_PHcqABoQAaBo2SQnTvjWD4vX_7Cuq_EJC-98oMA"
+#num_players = 10
+
+#r3 = requests.get(v1_url_cards, headers={"Accept":header1_Accept, "authorization":v2_header2_token}, params = {"limit":num_players})
+#t3 = json.loads(json.dumps(r3.json(), indent = 2))
+#cards = pd.DataFrame(t3)
+
+```
+
+Once I got the three files I save them as rds objects, in this way I can load them quickly and keep working with the same data instead to update again the requests.
+
+```{r}
+#saveRDS(object = py$players_list, file = "players.rds")
+#readRDS("players.rds")
+
+#saveRDS(object = py$battle_log_acum, file = "batallas.rds")
+#readRDS("batallas.rds")
+
+#saveRDS(object = py$cards, file = "cards.rds")
+#readRDS("cards.rds")
+
+```
+
+I can continue the analysis using the python object or the rds object. 
+
+```{r archivos}
+#players <- py$players_list
+players <- readRDS("players.rds")
+#batallas <- py$battle_log_acum
+batallas <- readRDS("batallas.rds")
+#cartas <- py$cards
+cartas <-readRDS("cards.rds")
+```
+
+# Data wrangling
+
+Exploring the data, I can see as there are few list-columns that may complicate the manipulation. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+glimpse(batallas)
+```
+
+First, I filter for the "Ladder" battles as its the scoope of the analysis. 
+
+Then, I modify the variables 'arena' and 'gameMode'. in order to get just the names of the arenas and the names of the gamemodes. 
+
+The list-columns of Opponent and Team is where there is almost the most important information for this analysis, the decks. I thought the better way to tidy the data is having one variable for each deck card, that means, the deck is compounded by 8 cards, then will need 8 variables for the Opponent and 8 variables for Team. Each variable will be a card as factor. 
+
+Also I removed the battles without trophy change, that means, the possible draws. I have now a clean dataset "batallas". I removed "Opp" and "Team" to have a lighter workspace without superfluous objects. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+batallas <- batallas %>% filter(do.call(rbind, batallas$gameMode)[,2] == "Ladder")
+    
+batallas$arena <- do.call(rbind, batallas$arena)[,2]
+
+batallas$gameMode <- do.call(rbind, batallas$gameMode)[,2] 
+
+Opp <- do.call(rbind, batallas$opponent)
+Opp <- Opp[,1]
+Opp <- tibble(Opp)
+Opp <- Opp %>% unnest_wider(Opp)
+Opp <- Opp %>% unnest_wider(cards)
+
+nombres <- paste("carta_", seq(1:8),sep = "")
+names(Opp)[grep(pattern = "...[1-8]", names(Opp))] <- nombres
+
+Opp$carta_1 <- Opp$carta_1 %>% tibble(carta_1 = .) %>% unnest_wider(carta_1) %>% .$name
+Opp$carta_2 <- Opp$carta_2 %>% tibble(carta_2 = .) %>% unnest_wider(carta_2) %>% .$name
+Opp$carta_3 <- Opp$carta_3 %>% tibble(carta_3 = .) %>% unnest_wider(carta_3) %>% .$name
+Opp$carta_4 <- Opp$carta_4 %>% tibble(carta_4 = .) %>% unnest_wider(carta_4) %>% .$name
+Opp$carta_5 <- Opp$carta_5 %>% tibble(carta_5 = .) %>% unnest_wider(carta_5) %>% .$name
+Opp$carta_6 <- Opp$carta_6 %>% tibble(carta_6 = .) %>% unnest_wider(carta_6) %>% .$name
+Opp$carta_7 <- Opp$carta_7 %>% tibble(carta_7 = .) %>% unnest_wider(carta_7) %>% .$name
+Opp$carta_8 <- Opp$carta_8 %>% tibble(carta_8 = .) %>% unnest_wider(carta_8) %>% .$name
+
+Team <- do.call(rbind, batallas$team)
+Team <- Team[,1]
+Team <- tibble(Team)
+Team <- Team %>% unnest_wider(Team)
+Team <- Team %>% unnest_wider(cards)
+
+nombres <- paste("carta_", seq(1:8),sep = "")
+names(Team)[grep(pattern = "...[1-8]", names(Team))] <- nombres
+
+Team$carta_1 <- Team$carta_1 %>% tibble(carta_1 = .) %>% unnest_wider(carta_1) %>% .$name
+Team$carta_2 <- Team$carta_2 %>% tibble(carta_2 = .) %>% unnest_wider(carta_2) %>% .$name
+Team$carta_3 <- Team$carta_3 %>% tibble(carta_3 = .) %>% unnest_wider(carta_3) %>% .$name
+Team$carta_4 <- Team$carta_4 %>% tibble(carta_4 = .) %>% unnest_wider(carta_4) %>% .$name
+Team$carta_5 <- Team$carta_5 %>% tibble(carta_5 = .) %>% unnest_wider(carta_5) %>% .$name
+Team$carta_6 <- Team$carta_6 %>% tibble(carta_6 = .) %>% unnest_wider(carta_6) %>% .$name
+Team$carta_7 <- Team$carta_7 %>% tibble(carta_7 = .) %>% unnest_wider(carta_7) %>% .$name
+Team$carta_8 <- Team$carta_8 %>% tibble(carta_8 = .) %>% unnest_wider(carta_8) %>% .$name
+ 
+batallas <- data.frame(batallas, Team, Opp[,8:15]) %>% filter(is.na(trophyChange)==F)
+
+rm(Opp, Team)
+
+```
+
+Now, the data is tidy and clean. Next step is factorise the cards columns. The file "cartas" has the information needed.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+glimpse(cartas)
+```
+
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+nombres_cartas <- as.character(trimws(as_vector(unnest_wider(cartas, items)[,1])))
+id_cartas <- as.character(unnest_wider(cartas, items)$id)
+
+# Factorise
+batallas$carta_1 <- factor(batallas$carta_1, levels = nombres_cartas)
+batallas$carta_2 <- factor(batallas$carta_2, levels = nombres_cartas)
+batallas$carta_3 <- factor(batallas$carta_3, levels = nombres_cartas)
+batallas$carta_4 <- factor(batallas$carta_4, levels = nombres_cartas)
+batallas$carta_5 <- factor(batallas$carta_5, levels = nombres_cartas)
+batallas$carta_6 <- factor(batallas$carta_6, levels = nombres_cartas)
+batallas$carta_7 <- factor(batallas$carta_7, levels = nombres_cartas)
+batallas$carta_8 <- factor(batallas$carta_8, levels = nombres_cartas)
+batallas$carta_1.1 <- factor(batallas$carta_1.1, levels = nombres_cartas)
+batallas$carta_2.1 <- factor(batallas$carta_2.1, levels = nombres_cartas)
+batallas$carta_3.1 <- factor(batallas$carta_3.1, levels = nombres_cartas)
+batallas$carta_4.1 <- factor(batallas$carta_4.1, levels = nombres_cartas)
+batallas$carta_5.1 <- factor(batallas$carta_5.1, levels = nombres_cartas)
+batallas$carta_6.1 <- factor(batallas$carta_6.1, levels = nombres_cartas)
+batallas$carta_7.1 <- factor(batallas$carta_7.1, levels = nombres_cartas)
+batallas$carta_8.1 <- factor(batallas$carta_8.1, levels = nombres_cartas)
+batallas$crowns <- as.factor(batallas$crowns)
+batallas <- batallas %>% mutate(vicder = factor(ifelse(batallas$trophyChange>0, 1, 0), levels = c(0, 1)))
+
+```
+
+# Exploratory Data Analysis
+
+As later I am going to build a model to predict the number of crowns its important see how is distributed the variable and its possible predictors. 
+
+The Data collected in the previous step is obtained for the first 1000 players in the ranking. This means, these battles might have a little bias through win, so I expect to find more victories than defeats.
+
+Another speculation I might do is about the crowns distribution. My "know-how" of the game tells me, that I am not able to win always, that when I win most of the times I have lost one tower but that is because I play "Golem" so, my intuition here is the distribution depends on the decks played, however my bet is I will find more battles won by 1 crown than the other cases together.   
+
+It's interesting to see which cards are the most used and less used, also see where Golem stands.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+ggplot(batallas, aes(x = startingTrophies))+
+    geom_density()+
+    ggtitle("Field of players")
+
+summary(batallas$vicder)
+
+ggplot(batallas, aes(x = crowns, fill = vicder))+
+    geom_histogram(stat = "count")+
+    ggtitle("Crowns by vicder")
+
+rbind(batallas %>%
+          select(contains("carta_")) %>% 
+          gather(key = 'key', value = 'value') %>%
+          count(value) %>%
+          arrange(desc(n)) %>%
+          head(n = 10),
+      batallas %>%
+          select(contains("carta_")) %>% 
+          gather(key = 'key', value = 'value') %>%
+          count(value) %>%
+          arrange(desc(n)) %>%
+          filter(value == "Golem"),
+      batallas %>% 
+          select(contains("carta_")) %>% 
+          gather(key = 'key', value = 'value') %>%
+          count(value) %>%
+          arrange(desc(n)) %>%
+          tail(n = 10)) %>%
+    ggplot(aes(x = reorder(value, n), y = n, fill = value == "Golem"))+
+    geom_col()+
+    coord_flip()+
+    ggtitle('TOP 10 Most and least used by both players')+
+    xlab("Cards")+
+    ylab("Freq")
+```
+
+I didn't fail in my speculations, first the field of players is pretty high, the average is near 5700 trophies (just to compare myself was arround 4900). The data was collected in the beggining of season 6, early december. When the season ends, the TOP 3 can be arround 8000 trophies. 
+
+The number of victories is much bigger than the defeats. 
+
+The crowns distribution when "Team" wins is likely I said before, 1 crown is the larger.
+
+Finally, the "Miner", "Zap" and "The log" are the most used. "Golem" stands quite far from the TOP sadly. 
+
+To continue exploring the dynamics behind the crowns distribution, I think that the card's winrate could explain something. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+newdata <- batallas %>%
+    select(-contains('.')) %>%
+    pivot_longer(cols = contains('carta_'), names_to = 'key', values_to = 'carta') %>%
+    select('carta', 'vicder') %>%
+    count(carta, vicder) %>% 
+    spread(key = 'vicder', value = 'n') %>%
+    na.fill(0) %>%
+    as.data.frame() %>%
+    plyr::rename(c("0" = "der", "1" = "vic")) %>%
+    mutate(color = ifelse(carta == "Golem", "#CC3D3D", "#1A80C4"))
+
+newdata[,2:3] <- unfactor(newdata[,2:3])
+
+newdata <- rbind(newdata %>% 
+                    group_by(carta) %>%
+                    mutate(win = vic/(vic+der), n = vic+der) %>%
+                    select(-c('der', 'vic')) %>%
+                    arrange(desc(n)) %>%
+                    head(n=10),
+                 newdata %>% 
+                    group_by(carta) %>%
+                    mutate(win = vic/(vic+der), n = vic+der) %>%
+                    select(-c('der', 'vic')) %>%
+                    arrange(desc(n)) %>%
+                    filter(carta == "Golem"),
+                newdata %>% 
+                    group_by(carta) %>%
+                    mutate(win = vic/(vic+der), n = vic+der) %>%
+                    select(-c('der', 'vic')) %>%
+                    arrange(desc(n)) %>%
+                    tail(n=10)) %>%
+                arrange(desc(win))
+
+ggplot(newdata, aes(x = reorder(carta, win), y = win, fill = n, color = carta != "Golem"))+
+    geom_col()+
+    scale_color_manual(values = c("red", "#00ff0000"))+
+    coord_flip()+
+    ggtitle('Cards winrate and use (Team)')+
+    xlab("Cards")+
+    ylab("Winrate")+
+    theme(axis.text.y = element_text(color = newdata$color[order(newdata$win)]))
+
+summary(newdata$win)
+
+```
+
+I see above as the winrate goes from a 70% at top and decreases to 40% to the bottom and its average is 61%. Maybe I could think that the more winrate has a card more likely to win by three crowns. However, this effect disapear if the opponent also play the same cards. It's necessary keep exploring.  
+
+Let's continue investigating what is behind the intuition said before "the number of crowns depends on the decks". Maybe the interaction or the association of many cards makes the difference.  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Dumieando cartas Team
+newdata <- batallas %>%
+    select(-contains(".")) %>%
+    select(contains("carta_")) %>%
+    mutate(carta_1 = factor(batallas$carta_1, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_2 = factor(batallas$carta_2, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_3 = factor(batallas$carta_3, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_4 = factor(batallas$carta_4, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_5 = factor(batallas$carta_5, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_6 = factor(batallas$carta_6, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_7 = factor(batallas$carta_7, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_8 = factor(batallas$carta_8, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           mazo = paste(carta_1, carta_2, carta_3, carta_4, carta_5, carta_6, carta_7, carta_8, sep = ", "))
+
+#Onehotencode
+m <- matrix(str_match(newdata$mazo[1], pattern = id_cartas), ncol = length(nombres_cartas))
+for (i in 2:nrow(newdata)){
+    p = matrix(str_match(newdata$mazo[i], pattern = id_cartas), ncol = length(nombres_cartas))
+    m = rbind(m, p)
+}
+m <- as.data.frame(m)
+names(m) <- nombres_cartas
+m <- ifelse(is.na(m), 0, 1) %>% as.data.frame()
+
+# Dumieando cartas Opponent
+newdata <- batallas %>%
+    select(contains("carta_")) %>%
+    select(contains(".")) %>%
+    mutate(carta_1.1 = factor(batallas$carta_1, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_2.1 = factor(batallas$carta_2, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_3.1 = factor(batallas$carta_3, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_4.1 = factor(batallas$carta_4, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_5.1 = factor(batallas$carta_5, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_6.1 = factor(batallas$carta_6, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_7.1 = factor(batallas$carta_7, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           carta_8.1 = factor(batallas$carta_8, levels = nombres_cartas, labels = unnest_wider(cartas, items)$id),
+           mazo = paste(carta_1.1, carta_2.1, carta_3.1, carta_4.1, carta_5.1, carta_6.1, carta_7.1, carta_8.1, sep = ", "))
+
+#Onehotencode
+o <- matrix(str_match(newdata$mazo[1], pattern = id_cartas), ncol = length(nombres_cartas))
+for (i in 2:nrow(newdata)){
+    p = matrix(str_match(newdata$mazo[i], pattern = id_cartas), ncol = length(nombres_cartas))
+    o = rbind(o, p)
+}
+o <- as.data.frame(o)
+names(o) <- paste(nombres_cartas, "_Opp", sep = "")
+o <- ifelse(is.na(o), 0, 1) %>% as.data.frame()
+
+#Creamos matriz interacciones
+mm <- matrix(ncol = length(m), nrow = length(m))
+for (i in 1:length(m)) {
+    for (j in 1:length(m)) {
+    mm[i, j] <- as.integer(count(filter(m, m[,i]*m[,j] == 1)))    
+    }
+}
+
+mm <- mm %>% data.frame(row.names = nombres_cartas) 
+names(mm) <- nombres_cartas
+mm[upper.tri(mm, diag = T)] <- 0
+
+mm %>% 
+    mutate(fila = rownames(mm)) %>%
+    gather(-'fila', key = 'key', value = 'value') %>%
+    filter(fila != key) %>% 
+    arrange(desc(value)) %>%
+    mutate(combo = paste(fila, key, sep = "+")) %>%
+    select(combo, value) %>%
+    head(n = 5) %>%
+    ggplot(aes(x = reorder(combo, value), y = value))+
+        xlab("Combo")+
+        ylab("Freq")+
+        geom_col()+
+        coord_flip()+
+        ggtitle("Most used")
+
+
+
+```
+
+Above I see the TOP 10 combination most used, that doesn't say anything about the crowns distribution. However is a good scoope to investigate.   
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+rbind(cbind(batallas$vicder, batallas$crowns, m) %>%
+    as.data.frame() %>%
+    plyr::rename(c("batallas$vicder" = "vicder", "batallas$crowns" = "crowns")) %>%
+    filter(Zap == 1, Miner == 1) %>%
+    group_by(crowns) %>%
+    summarise(freq = n()) %>%
+    mutate(combo = "Zap+Miner"),
+cbind(batallas$vicder, batallas$crowns, m) %>%
+    as.data.frame() %>%
+    plyr::rename(c("batallas$vicder" = "vicder", "batallas$crowns" = "crowns")) %>%
+    filter(Tornado == 1, `Baby Dragon` == 1) %>%
+    group_by(crowns) %>%
+    summarise(freq = n()) %>%
+    mutate(combo = "Tornado+Baby Dragon"),
+cbind(batallas$vicder, batallas$crowns, m) %>%
+    as.data.frame() %>%
+    plyr::rename(c("batallas$vicder" = "vicder", "batallas$crowns" = "crowns")) %>%
+    filter(`The Log` == 1, Skeletons == 1) %>%
+    group_by(crowns) %>%
+    summarise(freq = n()) %>%
+    mutate(combo = "The Log+Skeletons"),
+cbind(batallas$vicder, batallas$crowns, m) %>%
+    as.data.frame() %>%
+    plyr::rename(c("batallas$vicder" = "vicder", "batallas$crowns" = "crowns")) %>%
+    filter(Bats == 1, Miner == 1) %>%
+    group_by(crowns) %>%
+    summarise(freq = n()) %>%
+    mutate(combo = "Bats+Miner"),
+cbind(batallas$vicder, batallas$crowns, m) %>%
+    as.data.frame() %>%
+    plyr::rename(c("batallas$vicder" = "vicder", "batallas$crowns" = "crowns")) %>%
+    filter(`The Log` == 1, `Ice Spirit` == 1) %>%
+    group_by(crowns) %>%
+    summarise(freq = n()) %>%
+    mutate(combo = "The Log+Ice Spirit")) %>%
+ggplot(aes(x = reorder(combo, freq), y = freq, fill = crowns))+
+    geom_col()+
+    coord_flip()+
+  ggtitle("Distribution of Crowns by combo")
+
+
+```
+
+I see a little trend here, as much is the combo used, much percentage of get 0 and 1 crown. However I wouldn't belive that conclusion as the sample is small. Another way to understand the interaction between cards is by the correlation. I filtered the cards that have at least a correlation above 0.5 with one other random card. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+newdata <- as.data.frame(cbind(m, o))
+
+correlation <- cor(newdata[,c(1:97)])
+correlation[is.na(correlation)] <- 0 
+diag(correlation) <- 0
+correlation <- correlation %>%
+  as.data.frame() %>%
+  select_if(apply(., 2, max)> 0.5 & apply(., 2, max) != 1) %>%
+  .[apply(., 1, max) > 0.5,] 
+diag(correlation) <- 1
+corrplot::corrplot(as.matrix(correlation), method = "circle", type = "lower")
+```
+
+Let's conclude the exploring part with the crowns distribution by card. I focus on the scoope of the cards used more than 2k times. Here is clear which cards contribute more to get 2 or 3 crowns: zap, arrows, night witch.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+newdata <- batallas %>%
+  select(crowns, contains("carta")) %>%
+  select(-contains(".")) %>%
+  pivot_longer(-c(crowns), names_to = "carta", values_to = "values") %>%
+  select(-carta) %>%
+  group_by(values, crowns) %>%
+  summarise(freq = n()) %>% 
+  pivot_wider(names_from = crowns, values_from = freq) %>%
+  na.fill(0) %>%
+  as.data.frame()
+
+newdata[,2:5] <-  unfactor(newdata[,2:5])
+
+newdata %>% 
+  mutate(freq = newdata$`0`+newdata$`1`+newdata$`2`+newdata$`3`) %>%
+  filter(freq > 2000) %>%
+  pivot_longer(-c(values, freq), names_to = "crowns", values_to = "freq1") %>%
+  select(-freq) %>%
+  ggplot(aes(x = reorder(values, freq1), y = freq1, fill = crowns))+
+    geom_col(position = "fill")+
+    coord_flip()+
+    ggtitle("Crowns distribution by card")
+    
+```
+
+
+
+# Modelling
+
+I already have an idea of how the data is distributed, now is the time to make predictions. In the beginning of the document I said to build a model able to predict the number of crowns. 
+
+First let's preprocess our data before fit the model. Then split the data into 75% for train and 25% test, also set the seed.
+
+```{r Modeling, echo=TRUE, message=FALSE, warning=FALSE}
+# Modeling 
+newdata <- batallas %>% 
+    dplyr::select(vicder, crowns, contains("carta_")) %>%
+    mutate(carta_1 = as.integer(factor(batallas$carta_1, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_2 = as.integer(factor(batallas$carta_2, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_3 = as.integer(factor(batallas$carta_3, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_4 = as.integer(factor(batallas$carta_4, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_5 = as.integer(factor(batallas$carta_5, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_6 = as.integer(factor(batallas$carta_6, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_7 = as.integer(factor(batallas$carta_7, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_8 = as.integer(factor(batallas$carta_8, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           mazo = paste(carta_1, carta_2, carta_3, carta_4, carta_5, carta_6, carta_7, carta_8, sep = ", "),
+           carta_1.1 = as.integer(factor(batallas$carta_1.1, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_2.1 = as.integer(factor(batallas$carta_2.1, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_3.1 = as.integer(factor(batallas$carta_3.1, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_4.1 = as.integer(factor(batallas$carta_4.1, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_5.1 = as.integer(factor(batallas$carta_5.1, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_6.1 = as.integer(factor(batallas$carta_6.1, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_7.1 = as.integer(factor(batallas$carta_7.1, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           carta_8.1 = as.integer(factor(batallas$carta_8.1, levels = nombres_cartas, labels = c(1:length(nombres_cartas)))),
+           mazo.1 = paste(carta_1.1, carta_2.1, carta_3.1, carta_4.1, carta_5.1, carta_6.1, carta_7.1, carta_8.1, sep = ", ")) %>%
+    dplyr::select(-mazo, -mazo.1)
+
+# Split dataset
+set.seed(101)
+split = sample.split(newdata$crowns, SplitRatio = 0.75)
+training_set = subset(newdata, split == T)
+testing_set = subset(newdata, split == F)
+```
+
+First model is a Extrem Gradient Boosting where I do a manual search of the hyperparameters with 5 folds CV and plot the results. I let the variable 'vicder' to help the models to predict. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# XGBoost
+set.seed(101)
+control <- trainControl(method = "cv", 
+                        number = 5,
+                        search = 'grid',
+                        verboseIter = T)
+
+grid <- expand.grid(nrounds = seq(10,100, length.out = 4),
+                    max_depth = 17,
+                    eta = seq(0.1, 1, length.out = 3),
+                    gamma = seq(0.1, 1, length.out = 3),
+                    colsample_bytree = 1,
+                    min_child_weight = 1,
+                    subsample = 0.5)
+
+
+
+#Classifier with train
+classifier.xgb <- train(data = training_set,
+                        crowns~. ,
+                        method = "xgbTree", 
+                        trControl = control,
+                        tuneGrid = grid,
+                        metric = "Accuracy")
+
+# Prediction with test
+y_pred.xgb = predict(classifier.xgb, newdata = testing_set[,-2])
+
+# Confusion Matrix
+cm.xgb <- table(testing_set[,2], y_pred.xgb)
+accuracy.xgb <- sum(diag(cm.xgb))/nrow(testing_set)
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+plot(classifier.xgb)
+cm.xgb
+accuracy.xgb
+```
+Clearly I see as if the model has a slow learning rate, the results are better, then as more rounds does the model worse is the accuracy (overfitting) and finally a high gamma seems improve a little the accuracy for that combinations of shrinkage and number of rounds. The model predict pretty good the 0 and 1 but that is because 'crowns' is high correlated with 'vicder'and have more problems with the 2 and 3 crowns.
+
+Finally I set up and algorithm to run 5 different models with a random search of the hyperparamenters to see if there is the chance to improve the accuracy.
+
+- XgbTree: again, just in case with random search find a better grid. (Extrem Gradient Boosting)
+- rf: another ensamble model to face the problem. Maybe the random selection of predictors achieve better results than XgbTree. (RandomForest)
+- Linda: maybe there is some kind of clustering here that I could miss, this model can help. (Linear Discriminant Analysis)
+- naive_bayes: Perhaps facing this problem by conditional probabilities improve results. (Naives_bayes)
+- multinom: afterall maybe a simple logistic regression is the best model. 
+
+Which will win?
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+set.seed(101)
+
+models <- c("xgbTree", "rf", "Linda", "naive_bayes", "multinom")
+
+control <- trainControl(method = "cv",
+                        number = 5,
+                        search = "random",
+                        verboseIter = T,
+                        allowParallel = F)
+results <- list()
+predicts <- list()
+cms <- list()
+accuracies <- list()
+for (i in models){
+  classifier <- train(data = training_set,
+                      crowns~.,
+                      method = i,
+                      trControl = control,
+                      tuneLength = 5,
+                      metric = "Accuracy",
+                      ntree = 100)
+                      
+  results[[i]] <- classifier
+  y_pred <- predict(classifier, newdata = testing_set[,-2], type = "raw")
+  predicts[[i]] <- y_pred
+  cm <- table(testing_set[,2], y_pred)
+  cms[[i]] <- cm
+  accuracy <- sum(diag(cm))/nrow(testing_set)
+  accuracies[[i]] <- accuracy
+}
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+bwplot(resamples(results))
+cms
+accuracies
+```
+The plot shows XgbTree as the best model to predict crowns with a 0.6994502% of accuracy and Linda the worst with 0.4993891. It's relevant say that the logistic regression did very good job, let the accuracy at the level of the Extrem Gradient Boosting. 
+If analyse the confusion matrices, I see as multinom is not able to classify 2 and 3 crowns. So if i haveto choose one of those models I will go for the first or the second. Maybe the second as it has less parameters to tune and it has been faster. 
+
+
