@@ -1,0 +1,458 @@
+---
+title: "Clasificacion de churn de producto bancario"
+author: "Llorenç Noguera"
+date: "5/5/2020"
+output: 
+  html_document:
+    toc: true
+    theme: united 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Problema de clasificación
+
+  Nos encontramos ante un dataset de una entidad bancaria portuguesa con información a una campaña de marketing. El objetivo es tratar de identificar si el cliente está suscrito a un producto bancario o no. 
+
+
+## 1. Carga de librerias y de dataset
+
+  Nos vamos ayudar de las siguientes librerias
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(caret)
+library(GGally)
+library(tidymodels)
+library(skimr)
+library(fastICA)
+library(moments)
+library(corrplot)
+library(themis)
+library(kernlab)
+library(igraph)
+
+```
+
+  Cargamos el dataset
+
+```{r}
+df <- read.csv("bank-full.csv", header = T, sep = ";", stringsAsFactors = T)
+```
+
+
+## 2. Analisis exploratorio
+
+  Como podemos observar, el dataset consta de 45k observacion y 17 variables.
+
+```{r}
+str(df)
+```
+
+```{r}
+summary(df)
+```
+
+  Tenemos 6 de ellas categóricas y 7 numéricas. Afortunadamente no tenemos valores faltantes en las numéricas, en las categóricas se han creado un nivel adicional 'unknown'. La variable objetivo 'y' vemos que tiene un fuerte desbalanceo. 
+
+```{r}
+skim(df)
+```
+
+  Pasamos a graficar histogramas y boxplots para hacernos una idea visual de la forma de los datos con los que vamos a trabajar. Vemos que en las variables numéricas hay mucha asimetría, problema que deberemos corregir. En la parte de las categóricas, vemos que hay variables que tienen muchos niveles, algunos de los cuales tienen poca frecuencia o son redundantes, problema que también debe corregirse. Por la parte de la variable dependiente tambén deberemos de llevar algún tipo de acción para corregir su problema de desbalanceo.  
+
+```{r}
+ggplot(df, aes(x = age))+geom_histogram(aes(fill = y))
+ggplot(df, aes(x = job))+geom_histogram(aes(fill = y), stat = "count")+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(df, aes(x = marital))+geom_histogram(aes(fill = y), stat = "count")+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(df, aes(x = education))+geom_histogram(aes(fill = y), stat = "count")+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(df, aes(x = default))+geom_histogram(aes(fill = y), stat = "count")+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(df, aes(x = balance))+geom_histogram(aes(fill = y))
+ggplot(df, aes(x = housing))+geom_histogram(aes(fill = y), stat = "count")+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(df, aes(x = loan))+geom_histogram(aes(fill = y), stat = "count")+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(df, aes(x = contact))+geom_histogram(aes(fill = y), stat = "count")+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(df, aes(x = day))+geom_histogram(aes(fill = y))
+ggplot(df, aes(x = month))+geom_histogram(aes(fill = y), stat = "count")+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggplot(df, aes(x = duration))+geom_histogram(aes(fill = y))
+ggplot(df, aes(x = campaign))+geom_histogram(aes(fill = y))
+ggplot(df, aes(x = pdays))+geom_histogram(aes(fill = y))
+ggplot(df, aes(x = previous))+geom_histogram(aes(fill = y))
+ggplot(df, aes(x = poutcome))+geom_histogram(aes(fill = y), stat = "count")+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+ggplot(df, aes(x = age))+geom_boxplot(aes(fill = y))
+ggplot(df, aes(x = balance))+geom_boxplot(aes(fill = y))
+ggplot(df, aes(x = day))+geom_boxplot(aes(fill = y))
+ggplot(df, aes(x = duration))+geom_boxplot(aes(fill = y))
+ggplot(df, aes(x = campaign))+geom_boxplot(aes(fill = y))
+ggplot(df, aes(x = pdays))+geom_boxplot(aes(fill = y))
+ggplot(df, aes(x = previous))+geom_boxplot(aes(fill = y))
+
+
+
+```
+
+  En cuanto a agrupación de factores y modificación de variables categóricas se refiere,  si nos fijamos en la variable 'job' vemos que se puede agrupar según la naturaleza del trabajo en si son autónomos, no son autónomos o que no trabajan. Pasamos a la variable poutcome, donde vamos a convertirla en binaria según si ha habido exito o no.
+
+```{r}
+df$job <- gsub('^retired', 'no_job', df$job)
+df$job <- gsub('^unemployed', 'no_job', df$job)
+df$job <- gsub('^unknown', 'no_job', df$job)
+df$job <- gsub('^housemaid', 'no_job', df$job)
+df$job <- gsub('^student', 'no_job', df$job)
+df$job <- gsub('^entrepreneur', 'self_employed', df$job)
+df$job <- gsub('^self-employed', 'self_employed', df$job)
+df$job <- gsub('^admin.', 'with_job', df$job)
+df$job <- gsub('^blue-collar', 'with_job', df$job)
+df$job <- gsub('^management', 'with_job', df$job)
+df$job <- gsub('^services', 'with_job', df$job)
+df$job <- gsub('^technician', 'with_job', df$job)
+df$job <- factor(df$job)
+
+summary(df$job)
+
+df$month <- df$month %>% match(tolower(month.abb)) 
+
+df$poutcome <- gsub('^failure', 'no_success', df$poutcome)
+df$poutcome <- gsub('^other', 'no_success', df$poutcome)
+df$poutcome <- gsub('^unknown', 'no_success', df$poutcome)
+df$poutcome <- factor(df$poutcome)
+
+summary(df$poutcome)
+
+```
+
+  Ahora pasamos a ver las correlaciones de las variables numéricas y estudiar su asimetría. Como podemos ver, todas presentan una fuerte asimetría ya que sus valores son mayor a 0.7. También observamos correlación entre 'pdays' y 'previous', podemos incurrir a problemas de multicolinealidad por lo que prescindiremos de 'pdays'. Las modificaciones a estos problemas las llevaremos acabo mediante "recipes" más adelante. 
+
+```{r}
+vars_num <- df %>% select(balance, duration, campaign, pdays, previous) %>% names()
+
+for (i in vars_num){
+print(df[,i] %>% moments::skewness())
+}
+
+corrplot(corr = cor(df[,vars_num]))
+
+```
+
+## 3. Tratamiento outliers
+
+  Otro paso importante a la hora de preparar los datos es el tratamiento de outliers. Hay muchísimas formas de detección de outliers al igual que tratamientos. Aquí nos vamos a centrar en un análisis univariante, donde se considerará como outlier cada observación que no quede incluida entre el quantil 0.1 y 0.9, es decir, cualquier observación que caiga en el 10% de las colas será considerada outlier. En cuanto a tratamiento, se les asignará el valor maximo de rango, es decir, el valor correspondiente al quantil 0.1 en caso que esté en la cola menor o el del quantil 0.9 en caso que esté en la cola mayor. He barajado como intervalos un 0.25-0.75, 0.1-0.9, 0.05-0.95 y el que he elegido me ha parecido el más razonable ya que atrapa a las observaciones suficientes sin excederse. 
+
+```{r}
+vars_num <- df %>% select(balance, duration, campaign, pdays, previous) %>% names()
+
+for (i in vars_num){
+qnt <- quantile(df[i]%>%purrr::as_vector(), probs=c(.1, .9))
+caps <- quantile(df[i]%>%purrr::as_vector(), probs=c(.1, .9))
+H <- IQR(df[i] %>% purrr::as_vector())
+df[i][df[i] < (qnt[1] - H)] <- caps[1]
+df[i][df[i] > (qnt[2] + H)] <- caps[2]
+}
+```
+
+```{r}
+ggplot(df, aes(x = balance))+geom_boxplot(aes(fill = y))
+ggplot(df, aes(x = duration))+geom_boxplot(aes(fill = y))
+ggplot(df, aes(x = campaign))+geom_boxplot(aes(fill = y))
+ggplot(df, aes(x = pdays))+geom_boxplot(aes(fill = y))
+ggplot(df, aes(x = previous))+geom_boxplot(aes(fill = y))
+
+```
+
+## 4. Preprocesado con Recipes
+
+  En este apartado llevaremos a cabo todo el preprocesamiento en cuanto a feature engineering se refiere gracias a "recipes", que permite una forma clara, ordenada, limpia y efectiva de tratar los datos. Primero pasamos a plantar una semilla y a dividir entre training y test los datos.
+
+```{r}
+
+set.seed(2020)
+
+split <- createDataPartition(df$y, p = 0.7, list = TRUE)
+
+df_train <- df[split$Resample1,]
+df_test <- df[-split$Resample1,]
+
+```
+
+  Vamos a graficar las variables 'duration' y 'balance' para ver la transformación que ejecutamos más detalladamente. 
+
+```{r}
+ggplot(df_train, aes(x = duration, y = balance, color = y))+geom_point()
+```
+
+### 4.1. Creacion del recipe.
+
+  Pasamos a aplicar "recipes". Los recipes son como una receta de cocina, donde tu vas indicando los pasos a seguir para preparar el plato. Se empieza indicando como debe ser el recipe en forma de formula tipo un modelo lineal básico. A continuación, vamos indicando los ingredientes de la receta a traves de cada step. Posteriormente nos valemos de la función prep, para aplicar el recipe al conjunto de entrenamiento. Al conjunto de test lo transformaremos a través de la función bake. Si queremos ver como queda finalmente el conjunto de train tenemos que aplicar la funcion juice al recipe preparado. 
+
+  Pasamos a ver los pasos aplicados:
+  
+  - Primero eliminaremos variables que puedan inducir a multicolinealidad con un threshold de 0.7. 
+  
+  - Seguimos aplicando logaritmos a las variables numericas, ya que hemos visto antes que todas eran asimétricas. Importante dejar signed en TRUE ya que trata los casos de valores negativos y 0. Alternativamente se podria aplicar una transformación Yeojhonson pero no me ha convencido como finalmente se veian las observaciones ya que se ven más separados con logaritmos.
+  
+  - Convertimos las categóricas a variables dumy. 
+  
+  - Creamos interacciones entre 'duration' y categóricas que he visto que tienen una proporción importante de "si".
+  
+  - Posteriormente balanceamos. En este caso, me he decidio por hacer un randomundersampling a la clase mayoritaria, para ganar eficiencia computacional. He probado con métodos de smote+tomek y adasyn+tomek pero todos los métodos presentan resultados similares.
+  
+  - El siguiente paso es medir la distancia Mahalanobis entre clases con su centroide. 
+  
+  - Finalmente lo normalizamos todo.
+ 
+  Creamos los folds de validación cruzada y ya tenemos todos los ingredientes listos y preparados para cocinar.
+
+```{r}
+set.seed(2020)
+recipe <- recipe(y ~., data = df_train) %>% 
+  step_corr(all_numeric(), threshold = 0.7) %>%
+  step_log(all_numeric(), signed = TRUE) %>%
+  #step_YeoJohnson(all_numeric()) %>%
+  step_dummy(all_nominal(), -y) %>%
+  step_interact(terms = ~housing_yes*duration) %>%
+  step_interact(terms = ~poutcome_success*duration) %>%
+  #step_adasyn(y, over_ratio = 1, neighbors = 100, skip = TRUE, seed = 2020) %>%
+  #step_bsmote(y, over_ratio = 1, neighbors = 100, skip = TRUE, seed = 2020) %>%
+  #step_tomek(y, skip = TRUE) %>%
+  step_downsample(y, under_ratio = 1, skip = TRUE, seed = 2020) %>%
+  step_classdist(all_predictors(), class = "y", log = TRUE) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors()) %>%
+  step_range(all_predictors())  
+  
+df_train_recipe <- prep(recipe, training = df_train)  
+
+summary(df_train_recipe)  
+
+df_test_recipe <- bake(df_train_recipe, new_data = df_test, everything())
+
+df_train_recipe %>% 
+  juice() %>%
+  ggplot(aes(x = duration, y = balance, color = y))+
+  geom_point()
+
+cv_folds <- caret::createFolds(df_train_recipe %>% juice %>% .$y, k = 5, list = TRUE)
+
+```
+
+## 5. Modelos
+
+  En este apartado es donde se cocina el plato a través de los modelos. Empezamos creando la función para las métricas a optimizar. La llamaremos 'metrics' y en ella hallaremos la Precision, Recall y la F1. Nos vamos a centrar en optimizar la F1 debido a que 'y' padecía de un fuerte desbalanceo. Este desbalanceo provoca que la Accuracy no sea apropiada para optimizar debido a que los modelos tenderian a sesgar sus predicciones hacia la clase mayoritaria para obtener la maxima accuracy, en cambio la F1 hace la media harmónica de la Precision y la Recall con lo cual nos puede proporcionar resultados que se adaptan mejor a nuestro problema al dar más importancia a los False Positive y los False Negative. 
+  
+  $$\begin{array}
+{rrr}
+           &  Reference \\
+ Predicted & Event	& No Event \\
+ Event	   &  A	    &   B      \\
+ No Event	 &  C	    &   D      \\
+\end{array}$$
+            
+ - $Accuracy: A+D/A+B+C+D$
+ 
+ - $Precision = A/(A+B)$
+ 
+ - $Recall = A/(A+C)$
+ 
+ - $F1 = (1+beta^2) * precision * recall/((beta^2 * precision)+recall)$   *beta = 1 será nuestro caso 
+  
+```{r}
+metrics <- function(data, lev = NULL, model = NULL){
+  precision_res <- caret::precision(data$pred, data$obs, relevant = "yes")
+  recall_res <- caret::recall(data$pred, data$obs, relevant = "yes")
+  f1_res <- caret::F_meas(data$pred, data$obs, relevant = "yes", beta = 1)
+  names(precision_res) <- c("Precision")
+  names(recall_res) <- c("Recall") 
+  names(f1_res) <- c("F1")
+  c(precision_res, recall_res, f1_res)
+}
+
+```
+
+
+  Nos vamos a valer de la libreria caret para entrenar los modelos ya que presenta una estructura sencilla y clara para la busqueda de hiperparámetros, y la aplicación de la validación cruzada. Entonces, entrenaremos los modelos contenidos en 'models', en la que entrenaremos una amplia variedad. 
+  
+  He calculado también 'weights' para el caso que hubieramos decidido no balancear el trainingset y quisieramos aplicar costes.
+
+  Decidimos entrenar de cada tipo de algoritmo 5 modelos para la optimizacion de hiperparametros.
+  
+  Finalmente como la métrica elegida es la F1, evaluaremos que tan buenos clasificadores de la clase "yes" tenemos. Se podría hacer también desde el punto de vista de la clase "no" pero creo que es más interesante el enfoque desde la clase minoritaria. 
+  
+```{r}
+set.seed(2020)
+# Training
+
+models = c("glm", 'svmPoly', 'svmRadial', 'svmLinear', "glmnet", "naive_bayes", "rpart", "ranger", "xgbTree")
+num_model = 5
+
+weights <- as.numeric(df_train_recipe %>% juice %>% .$y)
+
+for(val in unique(weights)){
+  weights[weights==val] <- 1/sum(weights==val)*length(weights)/2
+} 
+
+
+modelos <- list()
+y_pred <- list()
+results <- list()
+
+  for (i in models){
+
+    control <- trainControl( 
+        search = "random", 
+        verboseIter = T, 
+        savePredictions = "final", 
+        classProbs = T,
+        summaryFunction = metrics,
+        method = "cv",
+        index = cv_folds
+        )
+
+    modelos[[i]] <- train(y~.
+      , data = df_train_recipe %>% juice 
+      #, weights =  weights
+      , method = i
+      , trControl = control
+      , metric = "F1"
+      , tuneLength = num_model 
+       )
+    
+    y_pred[[i]] <- predict(modelos[[i]], df_test_recipe %>% select(-y))
+    results[[i]] <- caret::confusionMatrix(y_pred[[i]], df_test_recipe$y, positive = "yes", mode = "prec_recall")
+    
+  }
+
+```
+
+  Una vez hemos entrenado los modelos, podemos evaluarlos sobre el conjunto test. Abajo podemos ver sus puntuaciones.  
+
+```{r}
+# Resultados
+
+results %>% 
+  map(.f = pluck("byClass")) %>% 
+  map(magrittr::extract, c("Precision", "Recall", "F1")) %>% 
+  data.frame() %>% 
+  t() %>%
+  data.frame() %>% 
+  mutate(Modelos = rownames(.)) %>% 
+  pivot_longer(-Modelos, names_to = "Metricas", values_to = "Scores") %>% 
+  ggplot(mapping = (aes(x = Metricas, y = Scores, color = Modelos)))+
+    geom_point()+
+    theme_grey()+
+    ggtitle("Resultados")
+
+```
+  
+  Como podemos observar dependiendo de la métrica tenemos resultados diferentes. Nos hemos centrado en optimizar la metrica F1, entonces según F1 la mejor performance la tiene el Extrem Gradient Boosting (xgbTree). Por otro lado, si hubiéramos decidido decantarnos por la Precision tendríamos que el mejor modelo sería un Naive Bayes (naive_bayes) o si de lo contrario, hubiera sido la Recall la métrica elegida, el mejor modelo seria RandomForest (ranger).  
+  
+  Veamos la matriz de confusión de nuestro mejor modelo. Efectivamente, vemos como es capaz de reconocer un buen porcentage de la clase "yes" (lo que seria la Recall), pero es a costa de una baja precision de sus predicciones a la clase "yes" ya que su porcentage no es muy bueno (Precision). Entonces la F1 pondera esas dos metricas por igual y nos deja su puntuación en un 0,55. 
+```{r}
+results$xgbTree
+```
+  
+### 5.1. Stacking  
+  
+  Como no acabamos de estar muy satisfechos con esta F1, intentaremos ver si la podemos mejorar mediante la técnica de stacking, que consiste en combinar varios modelos entre si. Gracias a las fortalezas de cada uno se consiguen compensar las debilidades respectivas obteniendo asi una posible mejora en la performance. Para conseguir un buen stacking es importante que los modelos seleccionados tengan una correlación baja entre sí, ya que de lo contrario obtendremos los resultados del mejor modelo de todos u otros suboptimos y eso es algo que ya tenemos y no nos interesa.
+  
+  Para ello vamos a investigar las correlaciones de nuestros modelos. Vemos como 'svmLinear' tiene correlaciones negativas fuertes con casi todos los otros modelos y como 'naive_bayes' está relativamente poco correlacionado con ninguno. En general, los modelos estan correlacionados según familia, es decir, la familia de los svm lo estan entre sí, los arboles de decision entre sí, etc...
+  
+  
+```{r}
+modelCor(resamples(modelos)) %>% corrplot()
+```
+
+  Una vez estudiadas las correlaciones, los pasos a seguir para elaborar nuestro modelo de stacking son los siguientes:
+  
+  1. Entrenar los modelos de la primera capa. (Ya lo hemos hecho arriba)
+  
+  2. Hacer predicciones sobre el conjunto de test y obtener asi el conjunto de test para el stacking. (Las predicciones ya las tenemos hechas)
+  
+  3. De los modelos entrenados, extraer las predicciones de validación cruzada del conjunto de entrenamiento. Así tenemos el conjunto de entramiento que usaremos para entrenar el modelo de stacking, osea la segunda capa. 
+  
+  4. Entrenar stack y hacer predicciones. Finalmente evaluar.
+  
+  Entonces, la estructura del stacking constará de la capa inicial o clasificadores débiles de 'xgbTree', 'naive_bayes' y 'rpart'. En la segunda capa un simple 'glm' como clasificador final. 
+  
+```{r}
+make_graph(edges = c('xgbTree', 'glm', 'naive_bayes', 'glm', 'rpart', 'glm')) %>% plot()
+```
+  
+
+```{r}
+set.seed(2020)
+# Creamos listas vacias que seran los conjuntos de entrenamiento y test del stack.
+
+df_train_stack <- list()
+y_pred_prob <- list()
+
+
+# Obtenemos las predicciones de validacion cruzada de los modelos seleccionados para el stacking.
+
+for (i in models[models %in% c("xgbTree", "naive_bayes", "rpart")]){
+  df_train_stack[[i]] <- modelos[[i]][["pred"]] %>% arrange(rowIndex, Resample) %>% .$yes
+  y_pred_prob[[i]] <- predict(modelos[[i]], df_test_recipe %>% select(-y), type = "prob") %>% .$yes
+}
+
+
+# Convertimos las listas y añadimos la variable objetivo a predecir a cada conjunto.
+
+df_train_stack <- df_train_stack %>% 
+  data.frame(y = modelos[["xgbTree"]][["pred"]] %>% arrange(rowIndex, Resample) %>% .$obs) %>% 
+  as_tibble()
+
+df_test_stack <- y_pred_prob %>% 
+  data.frame(y = df_test_recipe$y) %>% 
+  as_tibble()
+
+control2 <- trainControl( 
+        search = "random", 
+        verboseIter = T, 
+        savePredictions = "final", 
+        classProbs = T,
+        summaryFunction = metrics,
+        method = "cv",
+        number = 5
+        )
+
+stack <- train(y~.
+      , data = df_train_stack
+      , method = "glm"
+      , trControl = control2
+      , metric = "F1"
+      , tuneLength = 5 
+       )
+    
+y_pred_stack <- predict(stack, 
+                        df_test_stack %>% 
+                          select(-y))
+results_stack <- caret::confusionMatrix(y_pred_stack, 
+                                        df_test_stack$y, 
+                                        positive = "yes", 
+                                        mode = "prec_recall")
+results_stack
+```
+
+  Analizando los resultados vemos como hemos conseguido mejorar un poquito la F1 gracias al poder del Stacking.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
