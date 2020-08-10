@@ -1,0 +1,1037 @@
+---
+title: "Análisis series temporales con Machine Learning"
+author: "Llorenç Noguera"
+date: "17/7/2020"
+output: 
+  html_document:
+    toc: true
+    theme: united
+---
+
+```{r setup, include=FALSE, cache=T}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Forecast Cadena hotelera.
+
+En este documento se va a analizar el dataset "hotel_bookings.csv" obtenido de kaggle. El objetivo de este documento será hacer un análisis de series temporales sobre número de entradas de clientes al hotel. Utilizaré como variable temporal la fecha de entrada de los clientes al hotel. Trataré de crear un forecast o una prevision de número de reservas, aplicando una estrategia de ensemble directa multivariante. Al contrario de una estrategia recursiva donde cada nueva predicción se incorpora a la serie y se usa para sacar la próxima predicción, esta técnica consiste en crear un modelo específico para cada periodo de forecast para posteriormente combinar esa predicción con la predicción de cada horizonte temporal. De esta manera no arrastras un error en cada predicción como en la estrégia recursiva. 
+
+## 1. Carga de librerias y fichero.
+
+Cargamos las librerias
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(skimr)
+library(tsibble)
+library(forecastML)
+library(lubridate)
+library(fabletools)
+library(fable)
+library(feasts)
+library(caret)
+library(jsonlite)
+set.seed(101)
+```
+
+Cargamos el dataset
+
+```{r}
+df <- read.csv("hotel_bookings.csv", header = T)
+
+```
+
+## 2. Analisis exploratorio (EDA) y Preprocesamiento.
+
+Hacemos un vistazo rápido de la estructura de dataset
+
+Aproximadamente 120k observaciones, unas 32 variables. Hay unas 14 variables categóricas por unas 18 numéricas. 
+
+```{r}
+skimr::skim(df)
+```
+A primera vista, vemos que se han cargado las variables categóricas como carácteres, es necesario corregir eso para seguir explorando el dataset. Las tenemos que convertir a factor y así también tendremos cuenta de si aparecen valores faltantes. 
+
+La variable reservation_status_date contiene fechas como carácter, hay que corregir eso convirtiendo esa variable a tipo fecha.
+
+```{r}
+estructura <- skimr::skim(df)
+
+tipos_columnas <- data.frame(variable = estructura$skim_variable, tipo = estructura$skim_type)
+
+columnas_character <- tipos_columnas %>% filter(tipo == "character") %>% .$variable
+
+columnas_character <- columnas_character[-14]
+
+df[,columnas_character] <- lapply(df[,columnas_character], as.factor)
+
+df$reservation_status_date <- df$reservation_status_date %>% as.Date()
+
+df <- na.omit(df)
+
+```
+
+Volvemos a mirar como está la estructura de las categóricas para asegurarnos que los cambios se han aplicado correctamente.
+
+```{r}
+skimr::skim(df)
+```
+Ahora vamos crear la variable 'Fecha_entrada' a partir de las variables 'arrival...' que será la variable temporal que utilizaremos como referencia para nuestras series temporales. 
+
+```{r}
+df$Fecha_entrada <- paste(df$arrival_date_year, df$arrival_date_month, df$arrival_date_day_of_month, sep = "-") %>% lubridate::as_date()
+```
+
+Observando la estructura de las variables de más arriba decido a priori que variables pueden servirme de ayuda y quiero mantener. Para hacer sencillo el análisis prescindiré de las categóricas y mantendré solo las siguientes numéricas: 
+ 
+ - 'reservas' que es el número de reservas por dia.
+ - 'lead_time' que es la media de la antelación con la que han hecho la reserva por dia.
+ - 'pax' que es la media de la suma de las variables 'adult' y 'children'.
+ - 'adr' que es la media del average daily rate por dia.
+ 
+No entro a analizar ni cancelaciones, ni segmentos de mercado, ni canales de distribución, ni tarifas, etc... Me centro en moldear un dataset sencillo sobre el cual poder analizar las series temporales sin mucha dificultad y casuísticas especiales.
+
+```{r}
+df_ts <- df %>%
+  group_by(Fecha_entrada) %>%
+  summarise(reservas = n(),
+            lead_time = mean(lead_time),
+            pax = mean(adults+children),
+            adr = mean(adr)) %>%
+  as_tsibble(index = Fecha_entrada) %>%
+  tsibble::fill_gaps(.full = TRUE)
+
+
+```
+
+### 2.1. Correlaciones 
+
+Una vez tengo el dataset, procedo a analizar las correlaciones entre las variables. Como se puede observar, la variable dependiente que trataremos de predecir 'reservas' tiene un poco de correlación con 'lead_time', muy poca correlación con 'pax' y otro poquito de correlación con 'adr'. 
+
+```{r}
+cor(df_ts[,-1]) %>% corrplot::corrplot()
+```
+
+### 2.2. Visualizaciones de las variables.
+
+Vamos a graficar nuestras variables para ver como se comportan y asi tener una idea más visual.
+
+```{r}
+df_ts %>% 
+  pivot_longer(cols = c(reservas, lead_time, pax, adr), names_to = "variable", values_to = "valores") %>%
+  ggplot(aes(x = Fecha_entrada, y = valores, color = variable))+
+  geom_line(alpha = 0.8)+
+  scale_x_date(date_breaks = "3 month")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  ggtitle("Fecha entrada 1/07/2015 a 31/08/2017")
+
+```
+Podemos ver como más o menos las variables 'adr' y 'lead_time' siguen el mismo comportamiento que 'reservas'. Vemos como por ejemplo del periodo 2015-11-01 a 2016-02-01 la cadena tiene un menor volumen de reservas, alrededor de 50, y eso también se refleja en el 'adr', alrededor de 50 unidades monetarias y de 'lead_time' alrededor de 10 dias. Ocurre de igual forma en el mismo periodo de 2016. Los periodos de ocupación más alta de la cadena ocurren en verano llegando a cuotas cercanas a las 300 reservas,  adr de 100 unidades monetarias y antelación de alrededor de 100 dias. Cabe mencionar, que en el periodo comprendido entre 2016-07-01 y 2016-09-01 se podría esperar un volumen mayor de reservas al ser temporada alta, por lo que tipificaría ese periodo de anómalo. Las variables dependientes 'adr' y 'lead_time' presentan unas subidas que evidencian lo anteriormente comentado.
+
+La variable 'pax' no se ve bien en esa escala, por lo que lo volvemos a graficar. Podemos observar que esta variable no se comporta tan bien como las demás respecto al volumen de reservas. 
+
+```{r}
+scaleFactor <- max(df_ts$reservas) / max(df_ts$pax)
+
+df_ts %>% ggplot(aes(x = Fecha_entrada, y = reservas))+
+  geom_line(color = "#C77CFF", alpha = 0.8)+
+  geom_line(aes(y = lead_time), color = "#7CAE00", alpha = 0.8)+
+  geom_line(aes(y = pax * scaleFactor), color = "#00BFC4")+
+  geom_line(aes(y = adr), color = "#F8766D", alpha = 0.8)+
+  scale_y_continuous('reservas', sec.axis = sec_axis(~./scaleFactor, name = 'pax'))+
+  theme(axis.title.y.right = element_text(color = "#00BFC4"),
+        axis.text.y.right = element_text(color = "#00BFC4"))+
+  scale_x_date(date_breaks = "3 month")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  ggtitle("Fecha entrada 1/07/2015 a 31/08/2017")
+
+```
+Simplemente con este análisis de correlaciones y visualizaciones decido prescindir de la variable 'pax'. 
+
+```{r}
+df_ts <- df_ts  %>% select(-pax)
+```
+
+Seguimos analizando más a fondo la variable dependiente. En el histograma vemos que 140 reservas es el volumen de reservas diario más común, con una frecuencia de 80 dias. Observando la curva, vemos que es un poco asimétrica. Pasamos al boxplot y vemos que tenemos presencia de outliers en la parte superior de la cola. 
+
+```{r}
+df_ts %>% ggplot(aes(x = reservas))+geom_histogram()
+
+df_ts %>% ggplot(aes(x = reservas))+geom_boxplot()
+
+```
+
+### 2.3. Asimetría y Outliers.
+
+Como hemos visto que hay un poco de asimetría, la calculamos. No llega a 0.7, por lo que no es ningún problema que tengamos que tratar. 
+
+```{r}
+moments::skewness(df_ts$reservas)
+```
+
+Como hemos detectado la presencia de outliers vamos a estudiarlos un poco. Hay muchos criterios diferentes para catalogar outliers. Yo en este caso, me decanto por un analisis simple univariante, donde etiquetaré de outlier a las observaciones que se encuentren en el 10% de las colas más el rango interquartílico. 
+
+
+
+```{r}
+qnt <- quantile(df_ts$reservas %>% purrr::as_vector(), probs=c(.1, .9))
+H <- IQR(df_ts$reservas %>% purrr::as_vector())
+
+Outliers <- rbind(df_ts[df_ts$reservas < (qnt[1] - H),], 
+                  df_ts[df_ts$reservas > (qnt[2] + H),]) %>% arrange(desc(reservas))
+
+df_ts %>% 
+  pivot_longer(cols = c(reservas, lead_time, adr), names_to = "variable", values_to = "valores") %>%
+  ggplot(mapping = aes(x = Fecha_entrada, y = valores, color = variable))+
+  geom_line(alpha = 0.8)+
+  geom_point(Outliers, mapping = aes(x = Fecha_entrada, y = reservas), color = "red")+
+  geom_hline(yintercept = (qnt[2]+H), color = "black", alpha = 0.8, linetype = "dashed")+
+  geom_hline(yintercept = (qnt[1]-H), color = "black", alpha = 0.8, linetype = "dashed")+
+  scale_x_date(date_breaks = "3 month")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  ggtitle("Fecha entrada 1/07/2015 a 31/08/2017")
+
+```
+Una vez los tenemos detectados los podemos eliminar o darles algún tipo de tratamiento. Opto por darles un tratamiento, este tratamiento será reemplazarlos por los valores de corte que he usado para considerarlos outliers, es decir, 312 como máximo y -16 como mínimo. Por la cola inferior no tenemos ninguna observación.
+
+```{r}
+df_ts$reservas[df_ts$reservas > (qnt[2] + H)] <- 312
+```
+
+```{r}
+df_ts %>% 
+  pivot_longer(cols = c(reservas, lead_time, adr), names_to = "variable", values_to = "valores") %>%
+  ggplot(mapping = aes(x = Fecha_entrada, y = valores, color = variable))+
+  geom_line(alpha = 0.8)+
+  geom_point(Outliers, mapping = aes(x = Fecha_entrada, y = (qnt[2]+H)), color = "red")+
+  geom_hline(yintercept = (qnt[2]+H), color = "black", alpha = 0.8, linetype = "dashed")+
+  geom_hline(yintercept = (qnt[1]-H), color = "black", alpha = 0.8, linetype = "dashed")+
+  scale_x_date(date_breaks = "3 month")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  ggtitle("Fecha entrada 1/07/2015 a 31/08/2017")
+
+```
+
+### 2.4. Descomposición de la variable objetivo.
+
+Si descomponemos la serie entre sus principales componentes tenemos que: 
+
+   - Tendencia, patrón existente cuando hay un incremento o decremento a largo plazo en los datos.
+   
+   - Estacionalidad, patrón existente cuando una serie está influenciada por un factor estacional.
+   
+   - Cíclico, patrón existente cuando los datos muestran subidas y bajadas que no son de período fijo.
+   
+   - Residual, el componente restante. 
+
+```{r}
+descomposicion <- df_ts[,1:2] %>% 
+                    as_tsibble(index = Fecha_entrada) %>% 
+                    model(feasts::STL(reservas)) %>% 
+                    components()
+
+descomposicion %>% autoplot()
+
+```
+
+Usaremos tambíen los diferentes componentes de la variables dependiente como variables independientes para nuestros modelos. 
+
+```{r}
+df_ts <- data.frame(df_ts, descomposicion[,4:7]) %>% as_tsibble(index = Fecha_entrada)
+
+df_ts
+```
+
+Una vez hemos estudiado un poco las series, vamos a hacer la partición de las series entre el conjunto de training y el conjunto de test. El conjunto de training será toda la serie excepto el último mes que será el conjunto test que utilizaremos para evaluar el forecast. 
+
+```{r}
+df_ts %>%
+  ggplot(aes(x = Fecha_entrada, y = reservas))+
+  geom_line(alpha = 0.8)+
+  geom_vline(xintercept = df_ts$Fecha_entrada[nrow(df_ts)-30], linetype = "dashed", color = "red")+
+  scale_x_date(date_breaks = "3 month")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  ggtitle("Fecha entrada 1/07/2015 a 31/08/2017")
+```
+
+```{r}
+df_ts_train <- df_ts[1:(nrow(df_ts)-30),]
+df_ts_test <- df_ts[-c(1:(nrow(df_ts)-30)),]
+```
+
+### 2.5. Ingenieria de variables.
+
+Seguimos preparando el dataset para alimentar los modelos que aplicaremos más adelante. Para ello vamos a definir los siguientes parámetros:
+
+  - Outcome_col: es la columna tarjet que queremos predecir.
+  
+  - horizons: viene a ser la distancia a la que queremos hacer la predicción.
+  
+  - lookback: son los retardos que aplicaremos.
+  
+  - frequency: es la frecuencia de las observaciones.
+
+```{r}
+outcome_col <- 1 # La columna 1
+horizons <- c(1,7,30) # Vamos hacer forecasts a 1 dia vista, a una semana vista y a 1 mes vista.
+lookback <- c(1:35, 360:370) # Creamos retardos de 1 a 35 dias atrás y 360 a 370 dias atrás. 
+frequency <- "1 day" # La frecuencia de las observaciones es de 1 dia.
+```
+
+Limpiamos el dataset de la variable fecha y nos la guardamos en un vector aparte.
+
+```{r}
+dates <- df_ts$Fecha_entrada
+
+df_ts_train$Fecha_entrada <- NULL
+df_ts_test$Fecha_entrada <- NULL
+```
+
+Ahora formateamos el dataset con los parametros indicados más arriba.
+
+```{r}
+data_train <- forecastML::create_lagged_df(df_ts_train, type = "train",
+                                           outcome_col = outcome_col, 
+                                           lookback = lookback,
+                                           horizon = horizons, 
+                                           frequency = frequency,
+                                           dates = dates[1:nrow(df_ts_train)])
+
+```
+
+Para hacernos una idea de como ha quedado nuestro dataset, visualizamos un mapa de variables. Entonces, tenemos que el mapa indica la presencia de retardos para una única variable. El color lila indica la presencia del retardo, el amarillo la auséncia y el verde la predicción. La interpretación es que por ejemplo en el horizonte de '7' dias vista hay retardos de 370 a 360, de 35 a 8, de 7 a 1 no hay retardos ya que el forecast es semanal. 
+
+```{r}
+p <- plot(data_train)
+p <- p+geom_tile(NULL)
+p
+```
+También es necesario comentar que con el mapa de retardos aplicado, la dimensión del conjunto de datos varia de forma, es decir, al aplicar retardos de 1 año vista, ya perdemos 370 observaciones, entonces el conjunto de entrenamiento si tenia 763 observaciones ahora pasa a tener 393. Por otro lado, si ponemos de ejemplo el conjunto de datos para el horizonte '7'  vemos que asi como habíamos perdido en observaciones, hemos aumentado en variables, ya que hemos incluido los retardos. De de tener 7 variables pasamos a tener 281.  
+
+```{r}
+data_train$horizon_7 %>% head()
+```
+
+En el principio del documento había comentado en que consistía la estregía de forecast directa. Siendo fiel a la definición dada se debería de aplicar un modelo para cada periodo de forecast, pero al final, por motivos de sencillez y computacionales decido crear 3 horizontes temporales que serán suficientes para esta tarea.
+
+```{r}
+summary(data_train)
+```
+
+Una vez comprendido el mapa de variables pasamos a crear las ventanas que utilizaremos para la validación cruzada. En series temporales la validación cruzada funciona diferente a un problema estándar de machine learning ya que hay que tener en cuenta el horizonte temporal. Entonces, en este caso, se trata de reservar unos periodos fuera del modelo que utilizaremos para validar el modelo que hemos entrenado. 
+
+He decidido crear ventanas de 70 dias y espaciarlas en 70 dias también.
+
+```{r}
+# Creamos los conjuntos de datos para la validación cruzada.
+
+windows <- forecastML::create_windows(lagged_df = data_train, window_length = 70, include_partial_window = T, skip = 70)
+
+plot(windows, data_train, show_labels = T)
+```
+
+## 3. Modelos
+
+Ahora que ya tenemos los datos preparados para aplicar modelos, empezamos estableciendo un modelo benchmark, de referencia, que sea el objetivo a batir por los modelos que aplicaremos. Las métricas que utilizaré para evaluar los modelos son:
+
+  - MAE: Mean Absolute Error, error medio absoluto mide la magnitud promedio de los errores en un conjunto de predicciones, en valor absoluto. Es el promedio sobre la muestra de prueba de las diferencias absolutas entre la predicción y la observación real donde todas las diferencias individuales tienen el mismo peso.
+
+  $MAE = \displaystyle\frac{1}{n}\sum_{t=1}^{n}|e_t|$
+
+  - RMSE: Root Mean Squared Error, es la raíz cuadrada del promedio de las diferencias cuadradas entre la predicción y la observación real. Penaliza más los errores de valores más extremos. 
+  
+  $RMSE = \displaystyle\sqrt{\frac{1}{n}\sum_{t=1}^{n}e_t^2}$
+  
+### 3.1. Naive
+
+Podríamos empezar suponiendo que no nos gustan mucho las matemáticas y los números, por lo que hacer un forecast es una cuestión secundaria en la que no nos vamos a esforzar mucho. Entonces, nos conformamos con la idea de que este año será igual al anterior, es decir, nuestro modelo sería utilizar las observaciones del año pasado como predicción para el año actual.  También haremos un segundo modelo donde, aplicamos el supuesto que hoy nos hemos levantados optimistas a la hora de hacer el modelo y que creemos que este año será un 3% mejor que el pasado, es decir, utilizaremos como predicción el valor del periodo pasado multiplicado por un 3% y también lo evaluaremos. 
+
+Utilizaré las ventanas creadas de validación cruzada para comparar el modelo 'Naive'. Tenemos que 'cy' es el valor del año actual, es decir, es el valor real a predecir. Después tenemos a 'ly' que es el valor del año anterior que será el valor que utlizaremos como predicción. Finalmente volvemos a aplicar la misma dinámica en el caso optimista de 'Naive'.
+
+```{r}
+cy <- data.frame(df_ts,dates = dates) %>% 
+  filter(dates >= windows$start[1] & dates <= windows$stop[1] | 
+         dates >= windows$start[2] & dates <= windows$stop[2] |
+         dates >= windows$start[3] & dates <= windows$stop[3]) %>% 
+  select(reservas)
+
+ly <- data.frame(df_ts,dates = dates) %>% 
+  filter(dates >= (windows$start[1]-365) & dates <= (windows$stop[1]-365) |
+         dates >= (windows$start[2]-365) & dates <= (windows$stop[2]-365) |
+         dates >= (windows$start[3]-365) & dates <= (windows$stop[3]-365)) %>% 
+  select(reservas)
+
+naive_rmse_valid <- (cy-ly)^2 %>% lapply(mean) %>% unlist %>% sqrt
+naive_mae_valid <- abs(cy-ly) %>% lapply(mean) %>% unlist
+
+ly <- ly*1.03
+
+similar_rmse_valid <- (cy-ly)^2 %>% lapply(mean) %>% unlist %>% sqrt
+similar_mae_valid <- abs(cy-ly) %>% lapply(mean) %>% unlist
+
+list(naive_mae = naive_mae_valid, naive_rmse = naive_rmse_valid, similar_mae = similar_mae_valid, similar_rmse = similar_rmse_valid)
+
+
+``` 
+Pasamos a comprobar en el conjunto de test esta estretegia.
+
+```{r}
+pred_naive <- data.frame(df_ts,dates = dates) %>% 
+  filter(dates >= dates[(length(dates)-30-365)] & dates <= dates[length(dates)-365]) %>% 
+  select(reservas)
+
+naive_mae <- abs(df_ts_test$reservas-pred_naive) %>% lapply(mean) %>% unlist 
+
+naive_rmse <- (df_ts_test$reservas-pred_naive)^2 %>% lapply(mean) %>% unlist %>% sqrt
+
+list(naive_mae = naive_mae, naive_rmse = naive_rmse)
+```
+
+Este método arroja un MAE en el conjunto de test de 32 reservas y un RMSE de 38 reservas. Esta simple estrategia nos deja mucho margen de mejora, veamos como se comportan los siguientes modelos.
+
+### 3.2. SMA
+
+Como el modelo del apartado anterior es muy simple, probaremos en este apartado de aplicar una media móvil como método predictor y estableceremos este método como objetivo a batir por los algoritmos de Machine Learning que vienen en los próximos apartados.
+
+La media movil que aplicaremos será de 30 periodos pasados. Entonces, tenemos que cada predicción consistirá en la media de los últimos 30 periodos. 
+
+```{r}
+SMA_30 <- df_ts_train %>% mutate('MA-30' = slide_dbl(reservas, mean, .size = 30, .align = "right")) 
+```
+
+```{r}
+ggplot(SMA_30, aes(x = dates[1:nrow(df_ts_train)], y = reservas), color = "black")+
+  geom_line()+
+  geom_line(aes(y = `MA-30`), color = "red", size = 1)
+```
+
+La serie roja seria el ajuste de la SMA_30. Podemos ver como se ajusta en valores intermedios de la variable dependiente. Si observamos los errores en el conjunto de validación tenemos que reducimos casi a la mitad el MAE 36 reservas respecto a 'Naive' que eran 60 y el RMSE a 44 reservas respecto a 73. Podemos afirmar que en conjunto de entrenamiento ha habido una sustancial mejora, veamos si en el conjunto de test se corrobora esta mejora. 
+
+
+```{r}
+SMA_30_mae <-data.frame(SMA_30, dates = dates[1:nrow(df_ts_train)]) %>% 
+  filter(dates >= windows$start[1] & dates <= windows$stop[1] |
+         dates >= windows$start[2] & dates <= windows$stop[2] |
+         dates >= windows$start[3] & dates <= windows$stop[3]) %>% 
+  select(reservas, 'MA.30') %>% 
+  transmute(reservas = abs(reservas - MA.30)) %>% 
+  lapply(mean) %>% 
+  unlist
+
+SMA_30_mae
+```
+
+```{r}
+SMA_30_rmse <- data.frame(SMA_30,dates = dates[1:nrow(df_ts_train)]) %>% 
+  filter(dates >= windows$start[1] & dates <= windows$stop[1] |
+         dates >= windows$start[2] & dates <= windows$stop[2] |
+         dates >= windows$start[3] & dates <= windows$stop[3]) %>% 
+  select(reservas, 'MA.30') %>% 
+  transmute(reservas = (reservas - MA.30)^2) %>% 
+  lapply(mean) %>% 
+  unlist %>% 
+  sqrt
+
+SMA_30_rmse
+```
+
+Creamos el forecast de esta estrategia, podemos observar que el forecast va disminuyendo poco. Hay que tener cuidado con la media móvil ya que puede verse distorsionada por el componente cíclico de la serie. 
+
+```{r}
+SMA_30_forecast <- TTR::SMA(df_ts_train$reservas, n = 30) %>% forecast::forecast(h = 30) 
+
+autoplot(SMA_30_forecast)
+
+```
+
+Evaluamos el forecast y tenemos un MAE de 24 reservas y un RMSE de 30 reservas, que comparado con 'Naive' 32 y 38 respectivamente, corrobora una sustancial mejora en el conjunto de test. 
+
+```{r}
+SMA_30_error_forecast <- SMA_30_forecast %>% accuracy(df_ts_test$reservas)
+
+SMA_30_error_forecast[2,] 
+```
+
+### 3.3. ENET
+
+Ahora es el momento de aplicar algoritmos de machine learning a estas series temporales. Empezamos por una red elástica. La red elástica es un modelo de regresión lineal que normaliza el vector de coeficientes con las normas L1 y L2. Esto permite generar un modelo en el que solo algunos de los coeficientes sean no nulos, manteniendo las propiedades de regularización de Ridge. Entonces lambda es el parámetro de contracción o penalización de Ridge y Lasso, por otro lado tenemos el parametro alpha que es la ponderación o el peso que toma la penalización de Ridge o la de Lasso, cuando alpha = 0 tenemos el modelo Ridge y cuando alpha = 1 tenemos el modelo Lasso.
+
+Este modelo puede funcionar bastante bién ya que al haber creado tantos retardos de las variables independientes hemos aumentado mucho la dimensionalidad y es interesante ver el papel que juega la regularización aquí para contraer los parámetros de los retardos que no sean importantes. 
+
+Creamos la funcion para este modelo que nos permitirá obtener los mejores hyperparametros.
+
+```{r}
+model_function_ENET_cv <- function(data, outcome_col){
+  
+  grid <- expand.grid(alpha = seq(0,1,length.out = 5),
+                      lambda = c(0,50,100))
+  
+  control <- trainControl(method = "cv",
+                          number = 5,
+                          verboseIter = T)
+  
+  model <- caret::train(x = data[,-outcome_col],
+                        y = data[,outcome_col],
+                        method = "glmnet",
+                        metric = "RMSE",
+                        tuneGrid = grid,
+                        trControl = control)
+  
+  return(model)
+} 
+
+```
+
+Creamos la funcion para extraer los mejores hyperparametros.
+
+```{r}
+hyper_function <- function(model){
+  params <- model$bestTune
+  return(params)
+}
+```
+
+Ajustamos el modelo al conjunto de entrenamiento.
+
+```{r include=FALSE}
+model_results_ENET <- forecastML::train_model(data_train,
+                                         windows = windows,
+                                         model_name = "ENET", 
+                                         model_function = model_function_ENET_cv,
+                                         outcome_col = outcome_col,
+                                         use_future = FALSE)
+
+```
+
+Creamos la función para hacer predicciones.
+
+```{r}
+prediction_function <- function(model, data_features) {
+  
+  x <- as.matrix(data_features, ncol = ncol(data_features))
+  data_pred <- data.frame("y_pred" = predict(model, x))
+  return(data_pred)
+}
+
+```
+
+Obtenemos predicciones en los conjuntos de validación cruzada
+
+```{r}
+ENET_valid <- predict(model_results_ENET, prediction_function = list(prediction_function), data = data_train)
+
+```
+
+Graficamos 
+
+```{r}
+plot(ENET_valid, type = "prediction")
+```
+
+Obtenemos los errores de validación cruzada.
+
+```{r}
+ENET_error <- forecastML::return_error(ENET_valid)
+
+ENET_error$error_global
+```
+
+Si queremos ver como se han comportado los hyperparametros del modelo en las diferentes ventanas de validación cruzada, podemos hacerlo así:
+
+```{r}
+hyper_ENET <- return_hyper(model_results_ENET, hyper_function)
+plot(hyper_ENET, ENET_valid, ENET_error, type = "stability")
+plot(hyper_ENET, ENET_valid, ENET_error, type = "error")
+```
+
+De los gráficos de arriba, si empezamos por el de estabilidad de los hyperparametros, se desprende que el hyperparametro alpha se ha mantenido estable en el horizonte '1' y '7' a 1 en cambio en el horizonte '30' ha tenido más variación entre las diferentes ventanas variando de 0 a 0.25. Por el contrario lambda, se ha mantenido estable a 0  para todos los horizontes. Si seguimos con el gráfico de los errores, vemos el desempeño de cada hyperparametro según el horizonte y la métrica. 
+ 
+Cuando hemos hecho todo este proceso de busca de hyperparámetros con validación cruzada, pasamos a ajustar el modelo con los parámetros óptimos en toda la serie del conjunto de entrenamiento. Para ello, debemos aunar las ventanas anteriores en una sola o directamente crear un nuevo objeto.
+
+```{r}
+windows2 <- forecastML::create_windows(data_train, window_length = 0)
+
+p <- plot(windows2, data_train) + theme(legend.position = "none")+ggtitle("Full Training serie")
+p
+```
+Creamos una función para ajustar el modelo final con los hyperparámetros más estables, que serán aquellos que más veces han aparecido en cada horizonte y ventana. 
+
+```{r}
+model_function_final_ENET <- function(data, outcome_col){
+  
+  grid <- expand.grid(alpha = hyper_ENET %>% 
+                                group_by(alpha) %>% 
+                                summarise(count = n()) %>% 
+                                filter(count == max(count)) %>% 
+                                .$alpha,
+                      lambda = hyper_ENET %>% 
+                                group_by(lambda) %>% 
+                                summarise(count = n()) %>% 
+                                filter(count == max(count)) %>% 
+                                .$lambda)
+  
+  control <- trainControl(method = "none")
+  
+  model <- caret::train(x = data[,-outcome_col],
+                        y = data[,outcome_col],
+                        method = "glmnet",
+                        metric = "RMSE",
+                        tuneGrid = grid,
+                        trControl = control)
+  
+  return(model)
+} 
+
+```
+
+Ajustamos el modelo en la serie completa.
+
+```{r} 
+model_results_final_ENET <- forecastML::train_model(lagged_df = data_train, 
+                                               windows = windows2,
+                                               model_name = "ENET",
+                                               outcome_col = outcome_col,
+                                               model_function = model_function_final_ENET,
+                                               use_future = FALSE)
+ 
+``` 
+
+Vemos que tal se ajusta el modelo. Se adapta muy bién en el conjunto de entrenamiento, veremos ahora que tal produce el forecast y si padecemos de sobreajuste o no.
+
+```{r}
+train_ENET <- predict(object = model_results_final_ENET, prediction_function = list(prediction_function), data = data_train)
+
+plot(train_ENET, type = 'prediction')
+```
+
+Ahora pasamos a crear las predicciones en el conjunto de test.
+
+```{r}
+# Forecast.
+
+# Forward-looking forecast data.frame.
+data_forecast <- forecastML::create_lagged_df(df_ts_train, 
+                                              type = "forecast", 
+                                              frequency = frequency,
+                                              outcome_col = outcome_col, 
+                                              lookback = lookback,
+                                              horizons = horizons, 
+                                              dates = dates[1:nrow(df_ts_train)])
+
+```
+
+```{r}
+ENET_forecasts <- predict(model_results_final_ENET, 
+                           prediction_function = list(prediction_function), 
+                           data = data_forecast)
+
+```
+
+```{r}
+plot(ENET_forecasts, data_actual = df_ts[750:793,], actual_indices = dates[750:793])
+```
+Combinando las predicciones de cada horizonte el forecast queda de la siguiente manera.  
+
+```{r}
+ENET_combined <- forecastML::combine_forecasts(ENET_forecasts)
+
+plot(ENET_combined, data_actual = df_ts[750:793,], actual_indices = dates[750:793])
+
+ENET_error_forecast <- return_error(ENET_combined, df_ts, dates)
+
+ENET_error_forecast$error_global
+```
+
+La verdad es que parece que tiene un buen ajuste y es capaz de predecir correctamente el comportamiento de la serie. Si comparamos los resultados con la validación, vemos que empeora en MAE 23 (11) y empeora RMSE 33 (15). Por lo tanto, podríamos decir que si padecemos un poco de sobreajuste. De todas formas este sobreajuste se debe a periodos concretos como la predicción de dia 7-ago-2017 y la del 13-ago-2017. Si obviaramos esas dos predicciones quedaria un forecast bastante accurado.
+
+
+### 3.4. XGBOOST
+
+En este apartado vamos a implantar el modelo extrem gradient boosting (XGB). Este modelo es resultado del ensamblaje de múltiples predictores débiles como pueden ser los arboles de decisión. Es un modelo iterativo donde, como otros modelos de boosting, se optimiza a partir de una función de coste. 
+
+Este modelo consta de muchos parámetros: eta, gamma, max_depth, min_child_weight, subsample, colsample_bytree, nrounds.
+
+Este algoritmo es uno de los más de moda gracias a la buena performance que suele demostrar.
+
+Los pasos a seguir serán los mismos que para la red elástica. 
+
+Creamos la función del modelo de la cual obtendremos los mejores hyperparámetros aplicando validación cruzada en las diferentes ventanas. 
+
+```{r}
+model_function_XGB_cv <- function(data, outcome_col){
+  
+  grid <- expand.grid(eta = 0.3,
+                      gamma = 0.8,
+                      max_depth = c(4,6,8),
+                      min_child_weight = c(4,6,8),
+                      subsample = 0.5,
+                      colsample_bytree = 1,
+                      nrounds = 30)
+  
+  
+  control <- trainControl(method = "cv",
+                          number = 5,
+                          verboseIter = T)
+  
+  model <- caret::train(x = data[,-outcome_col],
+                        y = data[,outcome_col],
+                        method = "xgbTree",
+                        metric = "RMSE",
+                        tuneGrid = grid,
+                        trControl = control)
+  
+  return(model)
+} 
+
+```
+
+Ajustamos el modelo al conjunto de entrenamiento.
+
+```{r include=FALSE}
+model_results_XGB <- forecastML::train_model(data_train,
+                                         windows = windows,
+                                         model_name = "XGB", 
+                                         model_function = model_function_XGB_cv,
+                                         outcome_col = outcome_col,
+                                         use_future = FALSE)
+
+```
+
+Obtenemos predicciones en los conjuntos de validación cruzada
+
+```{r}
+XGB_valid <- predict(model_results_XGB, prediction_function = list(prediction_function), data = data_train)
+
+```
+
+Graficamos  
+
+```{r}
+plot(XGB_valid, type = "prediction")
+```
+
+```{r}
+XGB_error_valid <- forecastML::return_error(XGB_valid)
+
+XGB_error_valid$error_global
+```
+
+Como podemos ver este modelo tiene una gran cantidad de hyperparámetros, pero yo por sencillez solo he decidido tunear 'max_depth' y 'min_child_weigth'. Como podemos observar, no se saca una conclusión clara de cuales son los valores más estables, ya que según la ventana unos han funcionado mejor que otros. 
+
+```{r}
+hyper_XGB <- return_hyper(model_results_XGB, hyper_function)
+plot(hyper_XGB, XGB_valid, XGB_error_valid, type = "stability")
+plot(hyper_XGB, XGB_valid, XGB_error_valid, type = "error")
+```
+
+Ahora creamos una función para ajustar el modelo en toda la serie con los parámetros más estables.
+
+```{r}
+model_function_final_XGB <- function(data, outcome_col){
+  
+  grid <- expand.grid(eta = 0.3,
+                      gamma = 0.8,
+                      max_depth = hyper_XGB %>% 
+                                  group_by(max_depth) %>% 
+                                  summarise(count = n()) %>%
+                                  arrange(desc(count)) %>% 
+                                  .[1,1],
+                      min_child_weight = hyper_XGB %>% 
+                                         group_by(min_child_weight) %>% 
+                                         summarise(count = n()) %>%
+                                         arrange(desc(count)) %>% 
+                                         .[1,1],
+                      subsample = 0.5,
+                      colsample_bytree = 1,
+                      nrounds = 30)
+  
+  
+  control <- trainControl(method = "none")
+  
+  model <- caret::train(x = data[,-outcome_col],
+                        y = data[,outcome_col],
+                        method = "xgbTree",
+                        metric = "RMSE",
+                        tuneGrid = grid,
+                        trControl = control)
+  
+  return(model)
+} 
+
+```
+
+
+Ajustamos el modelo en la serie completa.
+
+```{r} 
+model_results_final_XGB <- forecastML::train_model(lagged_df = data_train, 
+                                               windows = windows2,
+                                               model_name = "XGB",
+                                               outcome_col = outcome_col,
+                                               model_function = model_function_final_XGB,
+                                               use_future = FALSE)
+ 
+``` 
+
+Lanzamos la predicciones del modelo en la serie de entrenamiento y sorprendentemente vemos que se ajusta muy pero que muy bien en todos los horizontes. 
+
+```{r}
+train_XGB <- predict(object = model_results_final_XGB, prediction_function = list(prediction_function), data = data_train)
+
+plot(train_XGB, type = 'prediction')
+```
+Ahora vamos a crear las predicciones en el conjunto test.
+
+```{r}
+XGB_forecasts <- predict(model_results_final_XGB, 
+                           prediction_function = list(prediction_function), 
+                           data = data_forecast)
+
+```
+
+Como podemos observar el forecast predice bastante bién la serie. 
+
+```{r}
+plot(XGB_forecasts, data_actual = df_ts[750:793,], actual_indices = dates[750:793])
+```
+
+Combinando las predicciones de cada horizonte el forecast queda de la siguiente manera.  
+
+```{r}
+XGB_combined <- forecastML::combine_forecasts(XGB_forecasts)
+
+plot(XGB_combined, data_actual = df_ts[750:793,], actual_indices = dates[750:793])
+
+XGB_error_forecast <- return_error(XGB_combined, df_ts, dates)
+
+XGB_error_forecast$error_global
+```
+
+Si observamos el forecast, podemos ver como el XGB no tiene un mal desempeño ya que consigue predecir de manera adecuada el comportamiento de la serie. Comparando su resultado con la validación podríamos decir que volvemos a padecer un poquito de sobreajuste, ya que MAE 23 (22) y RMSE 31 (28), ya que en test ha funcionado un poco peor que en la validación. También es importante comentar que ocurre lo mismo que con el modelo anterior, los dos periodos comentados (7-ago-2017 y 13-ago-2017) son un poco los culpables de este sobreajuste.
+
+### 3.5. SVR
+
+Finalmente el último modelo que ajustaremos será un support vector regression (SVR). Las SVR son muy parecidas a las SVM que se utilizan en clasificación, pero en este caso se utilizan en regresión. se basa en buscar la curva o hiperplano que modele la tendencia de los datos de entrenamiento y según ella predecir cualquier dato en el futuro. Todos los datos que se encuentren fuera del rango son considerados errores por lo que es necesario calcular la distancia entre el mismo y los rangos. Esta distancia lleva por nombre epsilon y afecta la ecuación final del modelo.
+
+En el mi algoritmo el epsilon vendrá llamado como 'C'. 
+
+Puede ser interesante ver el desempeño de este algoritmo ya que suele funcionar muy bien en problemas de alta dimensionalidad si a resultados se refiere, pero por contra puede tardar mucho en entrenar cuando hay grandes volúmenes de observaciones.
+
+Aplicaremos los mismos pasos que en los anteriores apartados. 
+
+Creamos la función del modelo de la cual obtendremos los mejores hyperparámetros aplicando validación cruzada en las diferentes ventanas. 
+
+```{r}
+model_function_SVR_cv <- function(data, outcome_col){
+  
+  grid <- expand.grid(C = c(0.01, 0.1, 1))
+  
+  
+  control <- trainControl(method = "cv",
+                          number = 5,
+                          verboseIter = T)
+  
+  model <- caret::train(x = data[,-outcome_col],
+                        y = data[,outcome_col],
+                        method = 'svmLinear',
+                        metric = "RMSE",
+                        tuneGrid = grid,
+                        trControl = control)
+  
+  return(model)
+} 
+
+```
+
+Ajustamos el modelo al conjunto de entrenamiento.
+
+```{r include=FALSE}
+model_results_SVR <- forecastML::train_model(data_train,
+                                         windows = windows,
+                                         model_name = "SVR", 
+                                         model_function = model_function_SVR_cv,
+                                         outcome_col = outcome_col,
+                                         use_future = FALSE)
+
+```
+
+Obtenemos predicciones en los conjuntos de validación cruzada.
+
+```{r}
+SVR_valid <- predict(model_results_SVR, prediction_function = list(prediction_function), data = data_train)
+
+```
+
+Graficamos.
+
+```{r}
+plot(SVR_valid, type = "prediction")
+```
+
+```{r}
+SVR_error_valid <- forecastML::return_error(SVR_valid)
+
+SVR_error_valid$error_global
+```
+
+Como podemos ver este modelo solo tiene un hyperparámetro, lo cual facilita su optimización. También se puede observar como posee una buena estabilidad en el horizonte '7' en 0.1, a diferencia de los demás parámetros que han ido variando.
+
+```{r}
+hyper_SVR <- return_hyper(model_results_SVR, hyper_function)
+plot(hyper_SVR, SVR_valid, SVR_error_valid, type = "stability")
+plot(hyper_SVR, SVR_valid, SVR_error_valid, type = "error")
+```
+
+Ahora creamos una función para ajustar el modelo en toda la serie con los parámetros más estables.
+
+```{r}
+model_function_final_SVR <- function(data, outcome_col){
+  
+  grid <- expand.grid(C = hyper_SVR %>% 
+                          group_by(C) %>% 
+                          summarise(count = n()) %>%
+                          arrange(desc(count)) %>% 
+                          .[1,1])
+  
+  control <- trainControl(method = "none")
+  
+  model <- caret::train(x = data[,-outcome_col],
+                        y = data[,outcome_col],
+                        method = "svmLinear",
+                        metric = "RMSE",
+                        tuneGrid = grid,
+                        trControl = control)
+  
+  return(model)
+} 
+
+```
+
+
+Ajustamos el modelo en la serie completa.
+
+```{r} 
+model_results_final_SVR <- forecastML::train_model(lagged_df = data_train, 
+                                               windows = windows2,
+                                               model_name = "SVR",
+                                               outcome_col = outcome_col,
+                                               model_function = model_function_final_SVR,
+                                               use_future = FALSE)
+ 
+``` 
+
+Lanzamos la predicciones del modelo en la serie de entrenamiento y vemos que se ajusta muy bien en todos los horizontes. 
+
+```{r}
+train_SVR <- predict(object = model_results_final_SVR, prediction_function = list(prediction_function), data = data_train)
+
+plot(train_SVR, type = 'prediction')
+```
+Ahora vamos a crear las predicciones en el conjunto test.
+
+```{r}
+SVR_forecasts <- predict(model_results_final_SVR, 
+                           prediction_function = list(prediction_function), 
+                           data = data_forecast)
+
+```
+
+Como podemos observar el forecast no desentona, predice bastante bién la serie. 
+
+```{r}
+plot(SVR_forecasts, data_actual = df_ts[750:793,], actual_indices = dates[750:793])
+```
+
+Combinando las predicciones de cada horizonte el forecast queda de la siguiente manera.  
+
+```{r}
+SVR_combined <- forecastML::combine_forecasts(SVR_forecasts)
+
+plot(SVR_combined, data_actual = df_ts[750:793,], actual_indices = dates[750:793])
+
+SVR_error_forecast <- return_error(SVR_combined, df_ts, dates)
+
+SVR_error_forecast$error_global
+```
+
+Como podemos observar el forecast se ha ajustado bastante bién al conjunto test. Ocurre lo mismo que con los otros dos modelos, los periodos 7-ago-2017 y 13-ago-2017 son los causantes del sobreajuste que existe en la validación (MAE 12, RMSE 14) y test (MAE 24, RMSE 32)
+
+## 4. Resultados
+
+En este apartado analizaremos conjuntamente las métricas de los modelos aplicados. 
+
+```{r}
+results <- predict(model_results_final_ENET, 
+                   model_results_final_XGB, 
+                   model_results_final_SVR, 
+                   prediction_function = list(prediction_function, 
+                                              prediction_function, 
+                                              prediction_function), 
+                   data = data_forecast)
+```
+
+Graficamos todos los forecasts en un solo gráfico para poder visualizar más claramente los resultados. Según horizonte temporal 
+
+```{r}
+plot(results, data_actual = df_ts[750:793,], actual_indices = dates[750:793])
+```
+
+Viendo la comparación de todos los forecasts se podría decir que para el horizonte '1' el mejor modelo sería ENET, para el horizonte '7' sería XGB y finalmente para el horizonte '30' ENET volvería ser el mejor. 
+
+```{r}
+rbind(SVR_combined, ENET_combined, XGB_combined) %>%
+  cbind(real = df_ts_test$reservas) %>%
+  ggplot()+
+    geom_line(aes(x = forecast_period, y = real), colour = "black")+
+    geom_line(aes(x = forecast_period, y = reservas_pred), colour = "steelblue1")+
+    facet_grid(vars(model))
+
+```
+Finalmente si analizamos los errores globales de todos los modelos vemos que el forecast de ENET es el menos sesgado ya que es el que tiene un MAE menor 23.5. Si tomamos de referencia el RMSE vuelve a ser ENET el que menor error arroja con 28.3, en este caso es ENET el modelo que tiene más sensibilidad a los outliers. Cabe destacar que en cuanto a sesgo nuestro modelos no han conseguido batir en mucho a la media móvil (SMA_30) ya que han tenido todos valores similares. 
+
+```{r}
+results_error <- return_error(results,df_ts, dates)$error_global %>% 
+  select(model, mae, rmse) %>% 
+  rbind(list("NAIVE", naive_mae, naive_rmse)) %>%
+  rbind(list("SMA_30", SMA_30_error_forecast[2,3], SMA_30_error_forecast[2,2]))
+  
+results_error[,-1] <- lapply(results_error[,-1], round,1)
+
+results_error
+```
+
+Estos resultados son muy mejorables con los siguientes puntos:
+
+  - Haciendo mayor hincapié en la búsqueda de hyperparámetros.
+  
+  - Añadiendo un modelo para cada periodo adicional de forecast. (Aquí solo hemos aplicado 3 horizontes diferentes para un forecast de 30 periodos).
+  
+  - Investigando en mayor amplitud la optimización de los retardos de las diferentes variables ya que aquí simplemente hemos cogido retardos a año vista y a un mes vista.
+  
+```{r}
+train <- predict(model_results_final_ENET, 
+                   model_results_final_XGB, 
+                   model_results_final_SVR, 
+                   prediction_function = list(prediction_function, 
+                                              prediction_function, 
+                                              prediction_function), 
+                   data = data_train)
+
+error_train <- return_error(train) 
+
+error_forecast <- return_error(results, df_ts, dates)
+
+error_train
+
+error_forecast
+```
+
+
+
+
+
+
+
+
+
+
