@@ -13,7 +13,7 @@ Finalmente para la parte de Deep Learning utilizo Keras.
 
 Poco a poco iré subiendo la resolución de estos mismos problemas en Python.
 
-Para el tema de dashboards dinámicos manejo PowerBI y menor medida Tableau. 
+Para el tema de dashboards dinámicos manejo PowerBI y Tableau. 
 
 Dejo este enlace de model deployment con PowerBI del documento de las series temporales. 
 
