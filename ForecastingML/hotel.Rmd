@@ -1008,23 +1008,7 @@ Estos resultados son muy mejorables con los siguientes puntos:
   
   - Investigando en mayor amplitud la optimización de los retardos de las diferentes variables ya que aquí simplemente hemos cogido retardos a año vista y a un mes vista.
   
-```{r}
-train <- predict(model_results_final_ENET, 
-                   model_results_final_XGB, 
-                   model_results_final_SVR, 
-                   prediction_function = list(prediction_function, 
-                                              prediction_function, 
-                                              prediction_function), 
-                   data = data_train)
 
-error_train <- return_error(train) 
-
-error_forecast <- return_error(results, df_ts, dates)
-
-error_train
-
-error_forecast
-```
 
 
 
