@@ -8,7 +8,7 @@ output:
     theme: united
 ---
 
-```{r setup, include=FALSE, cache=T}
+```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
