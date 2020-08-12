@@ -2337,13 +2337,13 @@ plot(hyper_XGB, XGB_valid, XGB_error_valid, type = &quot;stability&quot;)</code>
                                                use_future = FALSE)</code></pre>
 <pre><code>## `summarise()` ungrouping output (override with `.groups` argument)
 ## `summarise()` ungrouping output (override with `.groups` argument)</code></pre>
-<pre><code>## [13:37:19] WARNING: amalgamation/../src/objective/regression_obj.cu:170: reg:linear is now deprecated in favor of reg:squarederror.</code></pre>
+<pre><code>## [12:26:16] WARNING: amalgamation/../src/objective/regression_obj.cu:170: reg:linear is now deprecated in favor of reg:squarederror.</code></pre>
 <pre><code>## `summarise()` ungrouping output (override with `.groups` argument)
 ## `summarise()` ungrouping output (override with `.groups` argument)</code></pre>
-<pre><code>## [13:37:20] WARNING: amalgamation/../src/objective/regression_obj.cu:170: reg:linear is now deprecated in favor of reg:squarederror.</code></pre>
+<pre><code>## [12:26:16] WARNING: amalgamation/../src/objective/regression_obj.cu:170: reg:linear is now deprecated in favor of reg:squarederror.</code></pre>
 <pre><code>## `summarise()` ungrouping output (override with `.groups` argument)
 ## `summarise()` ungrouping output (override with `.groups` argument)</code></pre>
-<pre><code>## [13:37:20] WARNING: amalgamation/../src/objective/regression_obj.cu:170: reg:linear is now deprecated in favor of reg:squarederror.</code></pre>
+<pre><code>## [12:26:17] WARNING: amalgamation/../src/objective/regression_obj.cu:170: reg:linear is now deprecated in favor of reg:squarederror.</code></pre>
 <p>Lanzamos la predicciones del modelo en la serie de entrenamiento y sorprendentemente vemos que se ajusta muy pero que muy bien en todos los horizontes.</p>
 <pre class="r"><code>train_XGB &lt;- predict(object = model_results_final_XGB, prediction_function = list(prediction_function), data = data_train)
 
@@ -2506,137 +2506,6 @@ results_error</code></pre>
 <li><p>Añadiendo un modelo para cada periodo adicional de forecast. (Aquí solo hemos aplicado 3 horizontes diferentes para un forecast de 30 periodos).</p></li>
 <li><p>Investigando en mayor amplitud la optimización de los retardos de las diferentes variables ya que aquí simplemente hemos cogido retardos a año vista y a un mes vista.</p></li>
 </ul>
-<pre class="r"><code>train &lt;- predict(model_results_final_ENET, 
-                   model_results_final_XGB, 
-                   model_results_final_SVR, 
-                   prediction_function = list(prediction_function, 
-                                              prediction_function, 
-                                              prediction_function), 
-                   data = data_train)
-
-error_train &lt;- return_error(train) </code></pre>
-<pre><code>## Warning in return_error(train): &#39;rmsse&#39; was not calculated. The &#39;rmsse&#39; metric
-## needs a dataset of actuals passed in &#39;data_test&#39; and &#39;test_indices&#39;.</code></pre>
-<pre class="r"><code>error_forecast &lt;- return_error(results, df_ts, dates)
-
-error_train</code></pre>
-<pre><code>## $error_by_window
-##   model model_forecast_horizon window_number window_start window_stop
-## 1  ENET                      1             1   2016-07-05  2017-08-01
-## 2  ENET                      7             1   2016-07-05  2017-08-01
-## 3  ENET                     30             1   2016-07-05  2017-08-01
-## 4   SVR                      1             1   2016-07-05  2017-08-01
-## 5   SVR                      7             1   2016-07-05  2017-08-01
-## 6   SVR                     30             1   2016-07-05  2017-08-01
-## 7   XGB                      1             1   2016-07-05  2017-08-01
-## 8   XGB                      7             1   2016-07-05  2017-08-01
-## 9   XGB                     30             1   2016-07-05  2017-08-01
-##   window_midpoint      mae     mape    mdape    smape      rmse
-## 1      2017-01-17 2.135329 1.476763 1.108580 1.476431  2.808308
-## 2      2017-01-17 6.197104 4.156402 3.213549 4.143848  8.216852
-## 3      2017-01-17 9.995801 6.602832 4.762061 6.557707 13.264780
-## 4      2017-01-17 4.458571 3.050703 2.813999 3.052568  5.067687
-## 5      2017-01-17 6.515917 4.351926 3.145980 4.351654  9.162854
-## 6      2017-01-17 9.684231 6.352263 3.844218 6.313694 14.147912
-## 7      2017-01-17 4.067672 2.798626 2.000308 2.776454  5.310099
-## 8      2017-01-17 4.461732 3.011774 2.138393 2.989204  6.062153
-## 9      2017-01-17 4.907325 3.287900 2.394523 3.254355  6.647213
-## 
-## $error_by_horizon
-##   model model_forecast_horizon window_start window_stop      mae     mape
-## 1  ENET                      1   2016-07-05  2017-08-01 2.135329 1.476763
-## 2  ENET                      7   2016-07-05  2017-08-01 6.197104 4.156402
-## 3  ENET                     30   2016-07-05  2017-08-01 9.995801 6.602832
-## 4   SVR                      1   2016-07-05  2017-08-01 4.458571 3.050703
-## 5   SVR                      7   2016-07-05  2017-08-01 6.515917 4.351926
-## 6   SVR                     30   2016-07-05  2017-08-01 9.684231 6.352263
-## 7   XGB                      1   2016-07-05  2017-08-01 4.067672 2.798626
-## 8   XGB                      7   2016-07-05  2017-08-01 4.461732 3.011774
-## 9   XGB                     30   2016-07-05  2017-08-01 4.907325 3.287900
-##      mdape    smape      rmse
-## 1 1.108580 1.476431  2.808308
-## 2 3.213549 4.143848  8.216852
-## 3 4.762061 6.557707 13.264780
-## 4 2.813999 3.052568  5.067687
-## 5 3.145980 4.351654  9.162854
-## 6 3.844218 6.313694 14.147912
-## 7 2.000308 2.776454  5.310099
-## 8 2.138393 2.989204  6.062153
-## 9 2.394523 3.254355  6.647213
-## 
-## $error_global
-##   model window_start window_stop      mae     mape    mdape    smape     rmse
-## 1  ENET   2016-07-05  2016-07-05 6.197104 4.156402 3.213549 4.143848 8.216852
-## 2   SVR   2016-07-05  2016-07-05 6.515917 4.351926 3.145980 4.351654 9.162854
-## 3   XGB   2016-07-05  2016-07-05 4.461732 3.011774 2.138393 2.989204 6.062153
-## 
-## attr(,&quot;class&quot;)
-## [1] &quot;validation_error&quot; &quot;list&quot;            
-## attr(,&quot;error_metrics&quot;)
-## [1] &quot;mae&quot;   &quot;mape&quot;  &quot;mdape&quot; &quot;smape&quot; &quot;rmse&quot; 
-## attr(,&quot;outcome_name&quot;)
-## [1] &quot;reservas&quot;
-## attr(,&quot;method&quot;)
-## [1] &quot;direct&quot;</code></pre>
-<pre class="r"><code>error_forecast</code></pre>
-<pre><code>## $error_by_window
-##   model model_forecast_horizon window_number      mae      mape     mdape
-## 1  ENET                      1             1 15.38432 10.256216 10.256216
-## 2  ENET                      7             1 24.20168 15.464204 16.626156
-## 3  ENET                     30             1 23.49020 15.296517 11.020531
-## 4   SVR                      1             1 26.50051 17.667007 17.667007
-## 5   SVR                      7             1 24.57250 15.642347 15.576043
-## 6   SVR                     30             1 24.76623 15.824153 11.453045
-## 7   XGB                      1             1 42.18095 28.120636 28.120636
-## 8   XGB                      7             1 13.84384  8.387349  4.883462
-## 9   XGB                     30             1 25.75960 17.012756 11.946838
-##       smape     rmse     rmsse
-## 1  9.755922 15.38432 0.2194654
-## 2 13.967019 28.32872 0.4041239
-## 3 13.612761 33.81044 0.4823235
-## 4 16.233059 26.50051 0.3780436
-## 5 14.146124 28.38634 0.4049460
-## 6 14.754348 33.19511 0.4735455
-## 7 24.654180 42.18095 0.6017333
-## 8  8.264687 17.25908 0.2462098
-## 9 15.379602 36.15271 0.5157373
-## 
-## $error_by_horizon
-##   model model_forecast_horizon      mae      mape     mdape     smape     rmse
-## 1  ENET                      1 15.38432 10.256216 10.256216  9.755922 15.38432
-## 2  ENET                      7 24.20168 15.464204 16.626156 13.967019 28.32872
-## 3  ENET                     30 23.49020 15.296517 11.020531 13.612761 33.81044
-## 4   SVR                      1 26.50051 17.667007 17.667007 16.233059 26.50051
-## 5   SVR                      7 24.57250 15.642347 15.576043 14.146124 28.38634
-## 6   SVR                     30 24.76623 15.824153 11.453045 14.754348 33.19511
-## 7   XGB                      1 42.18095 28.120636 28.120636 24.654180 42.18095
-## 8   XGB                      7 13.84384  8.387349  4.883462  8.264687 17.25908
-## 9   XGB                     30 25.75960 17.012756 11.946838 15.379602 36.15271
-##       rmsse
-## 1 0.2194654
-## 2 0.4041239
-## 3 0.4823235
-## 4 0.3780436
-## 5 0.4049460
-## 6 0.4735455
-## 7 0.6017333
-## 8 0.2462098
-## 9 0.5157373
-## 
-## $error_global
-##   model      mae     mape    mdape    smape     rmse     rmsse
-## 1  ENET 23.49020 15.29652 11.02053 13.61276 28.32872 0.4041239
-## 2   SVR 24.76623 15.82415 15.57604 14.75435 28.38634 0.4049460
-## 3   XGB 25.75960 17.01276 11.94684 15.37960 36.15271 0.5157373
-## 
-## attr(,&quot;class&quot;)
-## [1] &quot;forecast_error&quot; &quot;list&quot;          
-## attr(,&quot;error_metrics&quot;)
-## [1] &quot;mae&quot;   &quot;mape&quot;  &quot;mdape&quot; &quot;smape&quot; &quot;rmse&quot;  &quot;rmsse&quot;
-## attr(,&quot;outcome_name&quot;)
-## [1] &quot;reservas&quot;
-## attr(,&quot;method&quot;)
-## [1] &quot;direct&quot;</code></pre>
 </div>
 </div>
 
