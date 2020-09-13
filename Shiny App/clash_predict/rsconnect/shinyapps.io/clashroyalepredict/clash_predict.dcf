@@ -1,0 +1,10 @@
+name: clash_predict
+title:
+username:
+account: clashroyalepredict
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2799953
+bundleId: 3624499
+url: https://clashroyalepredict.shinyapps.io/clash_predict/
+when: 1600011405.61785
