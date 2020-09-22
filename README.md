@@ -9,7 +9,7 @@ El lenguaje que uso es R donde empleo los paquetes de moda de Tidyverse como Car
 
 También me manejo con soltura con el paquete de H2o para datasets de más envergadura.
 
-Finalmente para la parte de Deep Learning utilizo Keras. 
+Finalmente para la parte de Deep Learning manejo Keras y tensorflow. 
 
 Poco a poco iré subiendo la resolución de estos mismos problemas en Python.
 
@@ -18,5 +18,10 @@ Para el tema de dashboards dinámicos manejo PowerBI y Tableau.
 Dejo este enlace de model deployment con PowerBI del documento de las series temporales. 
 
 https://app.powerbi.com/view?r=eyJrIjoiNzI0OTA4ZjEtZDE3Zi00NDJlLThlNDMtYmRkY2FmN2I1MzVhIiwidCI6IjcxYmIzNDU4LWQ3NWYtNDcxNi1hNWNiLTY0N2NkYWNiYzBhZiIsImMiOjh9&pageName=ReportSection
+
+Adicionalmente he hecho esta shinyapp para los apasionados de Clash Royale, 
+donde aplico deep learning para predecir la probabilidad que tienes de ganar según tu mazo y el del contrario. Url de la app: 
+
+https://clashroyalepredict.shinyapps.io/clash_predict/
 
 Espero que les gusten!
