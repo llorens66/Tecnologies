@@ -1,0 +1,454 @@
+---
+title: "clash_ML1"
+author: "Llorenç Noguera"
+date: "7/9/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(caret)
+library(keras)
+library(tensorflow)
+library(tfruns)
+library(GGally)
+```
+
+```{r}
+df <- rbind(read.csv("batallas_1_1000.csv", header = T)[,-1], 
+            read.csv("batallas_1001_10000.csv", header = T)[,-1], 
+            read.csv("batallas_10001_20000.csv", header = T)[,-1],
+            read.csv("batallas_20001_28313.csv", header = T)[,-1])
+
+cards_dim <- readRDS("cards_dim")
+```
+
+```{r}
+df[,-c(1:3)] <- lapply(df[,-c(1:3)], function(df){factor(df,levels = cards_dim$id)})
+```
+
+```{r}
+indx <- list()
+indx_opp <- list()
+
+
+for( i in 1:nrow(cards_dim)){
+  
+  indx[[i]] <-  c(grep(cards_dim$id[i], df$V1, fixed = T),
+                  grep(cards_dim$id[i], df$V2, fixed = T),
+                  grep(cards_dim$id[i], df$V3, fixed = T),
+                  grep(cards_dim$id[i], df$V4, fixed = T),
+                  grep(cards_dim$id[i], df$V5, fixed = T),
+                  grep(cards_dim$id[i], df$V6, fixed = T),
+                  grep(cards_dim$id[i], df$V7, fixed = T),
+                  grep(cards_dim$id[i], df$V8, fixed = T)) %>% sort()
+
+}
+
+for ( i in 1:nrow(cards_dim)){
+  
+  indx_opp[[i]] <-  c(grep(cards_dim$id[i], df$V1.1, fixed = T),
+                      grep(cards_dim$id[i], df$V2.1, fixed = T),
+                      grep(cards_dim$id[i], df$V3.1, fixed = T),
+                      grep(cards_dim$id[i], df$V4.1, fixed = T),
+                      grep(cards_dim$id[i], df$V5.1, fixed = T),
+                      grep(cards_dim$id[i], df$V6.1, fixed = T),
+                      grep(cards_dim$id[i], df$V7.1, fixed = T),
+                      grep(cards_dim$id[i], df$V8.1, fixed = T)) %>% sort()
+
+}
+
+
+m <- matrix(data = NA, nrow = nrow(df), ncol = nrow(cards_dim))
+
+for ( i in 1:nrow(cards_dim)){
+  m[indx[[i]],i] <- 1
+  m[-indx[[i]],i] <- 0
+}
+
+colnames(m) <- cards_dim$name
+
+n <- matrix(data = NA, nrow = nrow(df), ncol = nrow(cards_dim))
+
+for ( i in 1:nrow(cards_dim)){
+  n[indx_opp[[i]],i] <- 1
+  n[-indx_opp[[i]],i] <- 0
+}
+
+colnames(n) <- paste(cards_dim$name, "_opp", sep = "")
+
+
+```
+
+```{r}
+df <- data.frame(df[,1:3],m,n) 
+
+rm(indx, indx_opp, m, n)
+```
+
+```{r}
+ggplot(df, aes(x = trophyChange, fill = trophyChange))+geom_histogram(stat = "count")
+
+df %>% group_by(trophyChange) %>% count()
+
+prop.table(table(df$trophyChange))
+```
+
+
+```{r}
+set.seed(2020)
+df <- UBL::RandUnderClassif(trophyChange~., dat = df, C.perc = "balance")
+rownames(df) <- NULL
+
+```
+
+```{r}
+df$trophyChange <- factor(df$trophyChange)
+
+levels(df$trophyChange) <- c("0","1")
+
+df[,c(2:3)] <- as.matrix(apply(df[,c(2:3)], 2, function(x){
+  (x-min(x))/(max(x) - min(x))
+  }))
+```
+
+
+```{r}
+set.seed(2020)
+split_train <- caret::createDataPartition(df$trophyChange, 1, p = 0.6)
+
+train <- df[split_train$Resample1,]
+
+x <- df[-split_train$Resample1, ]
+
+split_valid <- caret::createDataPartition(x$trophyChange, 1, p = 0.5)
+
+valid <- x[split_valid$Resample1,]
+test <- x[-split_valid$Resample1,]
+rm(x, split_train, split_valid)
+```
+
+# Keras TF
+
+```{r}
+y = train$trophyChange
+x = train[,-1] %>% as.matrix
+
+y_valid = valid$trophyChange
+x_valid = valid[,-1] %>% as.matrix
+
+y_test = test$trophyChange
+x_test = test[,-1] %>% as.matrix
+
+# one hot encode classes / create DummyFeatures
+levels(y) = 1:length(y)
+y = to_categorical(as.integer(y) - 1 , num_classes = 2)
+
+levels(y_valid) = 1:length(y_valid)
+y_valid = to_categorical(as.integer(y_valid) - 1 , num_classes = 2)
+
+levels(y_test) = 1:length(y_test)
+y_test = to_categorical(as.integer(y_test) - 1 , num_classes = 2)
+
+
+rm(train, valid, test)
+
+```
+
+
+```{r}
+FLAGS <- flags(
+  flag_numeric("neurons1" , 512),
+  flag_numeric("neurons2" , 512),
+  flag_numeric("neurons3" , 40),
+  flag_numeric("neurons4" , 40),
+  flag_numeric("neurons5" , 40),
+  flag_numeric("neurons6" , 40),
+  flag_numeric("neurons7" , 40),
+  flag_numeric("neurons8" , 2),
+  flag_numeric("dropout1" , 0.1),
+  flag_numeric("dropout2" , 0.1),
+  flag_numeric("dropout3" , 0.5),
+  flag_numeric("dropout4" , 0.5),
+  flag_numeric("dropout5" , 0.5),
+  flag_numeric("dropout6" , 0.5),
+  flag_numeric("dropout7" , 0.5),
+  flag_numeric("l2" , 0.01),
+  flag_numeric("lr" , 0.01),
+  flag_string("activ1" , 'relu'),
+  flag_string("activ2" , 'relu'),
+  flag_string("activ3" , 'relu'),
+  flag_string("activ4" , 'relu'),
+  flag_string("activ5" , 'relu'),
+  flag_string("activ6" , 'relu'),
+  flag_string("activ7" , 'relu'),
+  flag_string("activ8" , 'sigmoid'),
+  flag_string("optimizer", 'adam')
+)
+
+build_model <- function() {
+  
+  model <- keras_model_sequential() 
+  
+  model %>% 
+    layer_dense(units = FLAGS$neurons1, 
+                input_shape = dim(x)[2], 
+                activation = FLAGS$activ1, 
+                kernel_regularizer = regularizer_l2(l = FLAGS$l2)) %>%
+    layer_dropout(FLAGS$dropout1) %>% 
+    layer_dense(units = FLAGS$neurons2, activation = FLAGS$activ2) %>%
+    layer_dropout(FLAGS$dropout2) %>% 
+    #layer_dense(units = FLAGS$neurons3, activation = FLAGS$activ3) %>%
+    #layer_dropout(FLAGS$dropout3) %>% 
+    #layer_dense(units = FLAGS$neurons4, activation = FLAGS$activ4) %>%
+    #layer_dropout(FLAGS$dropout4) %>% 
+    #layer_dense(units = FLAGS$neurons5, activation = FLAGS$activ5) %>%
+    #layer_dropout(FLAGS$dropout5) %>% 
+    #layer_dense(units = FLAGS$neurons6, activation = FLAGS$activ6) %>%
+    #layer_dropout(FLAGS$dropout6) %>% 
+    #layer_dense(units = FLAGS$neurons7, activation = FLAGS$activ7) %>%
+    #layer_dropout(FLAGS$dropout7) %>% 
+    layer_dense(units = FLAGS$neurons8, activation = FLAGS$activ8)
+
+  optimizer <- switch(FLAGS$optimizer,
+                      sgd = optimizer_sgd(lr = FLAGS$lr),
+                      adam = optimizer_adam(lr = FLAGS$lr))
+  
+  model %>% compile(
+    loss = "binary_crossentropy",
+    optimizer = FLAGS$optimizer,
+    metrics = list('binary_accuracy')
+  )
+  model
+}
+
+model <- build_model()
+
+early_stop <- callback_early_stopping(monitor = "val_loss", patience = 3, restore_best_weights = T)
+epochs <- 50
+
+history <- model %>% fit(
+  x,
+  y,
+  epochs = epochs,
+  validation_data = list(x_valid,y_valid),
+  verbose = 1,
+  callbacks = list(early_stop)
+)
+
+score <- model %>% evaluate(
+  x_test, y_test,
+  verbose = 0
+)
+
+save_model_hdf5(model, 'model.h5')
+summary(model)
+cat('Test loss:', score$loss, '\n')
+cat('Test accuracy:', score$binary_accuracy, '\n')
+  
+```
+
+```{r}
+par <- list(
+  neurons1 = c(2000),
+  #neurons2 = c(40),
+  #neurons3 = c(8),
+  #neurons4 = c(4),
+  #neurons5 = c(50),
+  #neurons6 = c(16),
+  #neurons7 = c(256),
+  neurons8 = c(2),
+  dropout1 = c(0.5),
+  #dropout2 = c(0.5),
+  #dropout3 = c(0.5),
+  #dropout4 = c(0.5),
+  #dropout5 = c(0.5),
+  #dropout6 = c(0.5),
+  #dropout7 = c(0.5),
+  l2 = c(0),
+  lr = c(0.01),
+  activ1 = c('relu'),
+  #activ2 = c('relu'),
+  #activ3 = c('relu'),
+  #activ4 = c('relu'),
+  #activ5 = c('relu'),
+  #activ6 = c('relu'),
+  #activ7 = c('relu'),
+  activ8 = c('sigmoid'),
+  optimizer = c('adam')
+)
+
+runs <- tuning_run('train.R', sample = 1, flags = par)
+
+```
+
+```{r}
+ls_runs() %>% arrange(desc(eval_binary_accuracy)) %>% view()
+```
+
+```{r}
+best_model_dir <- ls_runs() %>% arrange(desc(eval_binary_accuracy)) %>% .$run_dir %>% .[1]
+```
+
+```{r}
+best_model <- load_model_hdf5(filepath = str_c(best_model_dir, 'model.h5', sep = '/'))
+```
+
+```{r}
+best_model %>% predict_proba(x_test)
+```
+
+# caret
+
+```{r}
+#levels(train$trophyChange) <- c("D","V")
+glm <- caret::train(y = factor(y[,2], labels = c("D", "V")), x = x, method = "glm",trControl = trainControl( 
+        verboseIter = T, 
+        savePredictions = "final", 
+        classProbs = T,
+        method = "cv",
+        number = 5,
+        search = "random",
+        ), metric = "Accuracy", tuneLength = 5)
+  
+glm %>% summary()
+
+caret::confusionMatrix(predict(glm, newdata = x_test, type = "raw"), factor(y_test[,2], labels = c("D","V")))
+```
+
+```{r}
+control <- trainControl( 
+        verboseIter = T, 
+        savePredictions = "final", 
+        classProbs = T,
+        summaryFunction = twoClassSummary,
+        method = "adaptive_cv",
+        number = 3,
+        repeats = 3,
+        adaptive = list(min = 3,
+                        alpha = 0.1,
+                        method = "BT",
+                        complete = FALSE),
+        search = "random"
+        )
+
+xgb <- caret::train(y = train$trophyChange, 
+                    x = train[,-1], 
+                    method = "xgbTree",
+                    trControl = control, 
+                    metric = "ROC",
+                    tuneLength = 5)
+
+caret::confusionMatrix(predict(xgb, newdata = test[,-1], type = "raw"), factor(test[,1]))
+saveRDS(xgb, "xgb")
+```
+
+#h20
+
+```{r}
+h2o.init(nthreads = -1, max_mem_size = "5g")
+```
+
+
+```{r}
+train <- as.h2o(train)
+valid <- as.h2o(valid)
+test <- as.h2o(test)
+
+```
+
+
+```{r}
+# Nombres de X Y
+Y <- "trophyChange"
+X <- setdiff(names(train), Y)
+```
+
+
+```{r}
+# GBM hyperparameters 
+gbm_params <- list(learn_rate = c(0.1, 0.2, 0.3),
+                   max_depth = c(4,7,10),
+                   sample_rate = c(0.3, 0.5, 0.8),
+                   col_sample_rate = c(0.3, 0.5, 0.8),
+                   min_rows = c(5,10,15),
+                   ntrees = c(10,30,50)
+                   )
+
+rf_params <- list(mtries = c(50,100,150),
+                  min_rows = c(5,10,15),
+                  max_depth = c(4,7,10),
+                  sample_rate = c(0.3, 0.5, 0.8),
+                  ntrees = c(10,30,50)
+                  )
+
+search_criteria <- list(strategy = "RandomDiscrete", max_models = 10, seed = 2020)
+
+# Train a random grid of GBMs
+gbm_grid <- h2o.grid(algorithm = "gbm", 
+                      x = X, 
+                      y = Y,
+                      training_frame = train,
+                      nfolds = 5,
+                      fold_assignment = "Stratified", 
+                      keep_cross_validation_predictions = TRUE,
+                      seed = 2020,
+                      hyper_params = gbm_params,
+                      search_criteria = search_criteria
+                    )
+
+
+# Train a random grid of rfs
+rf_grid <- h2o.grid(algorithm = "randomForest", 
+                      x = X, 
+                      y = Y,
+                      training_frame = train,
+                      nfolds = 5,
+                      fold_assignment = "Stratified", 
+                      keep_cross_validation_predictions = TRUE,
+                      seed = 2020,
+                      hyper_params = rf_params,
+                      search_criteria = search_criteria
+                    )
+
+
+
+# Train a stacked ensemble using the GBM and RF above
+ensemble <- h2o.stackedEnsemble(x = X,
+                                y = Y,
+                                training_frame = train,
+                                base_models = c(gbm_grid@model_ids, rf_grid@model_ids),
+                                metalearner_algorithm = "deeplearning"
+                                )
+ensemble
+
+rf_grid@summary_table$model_ids[1] %>% h2o.getModel() %>% h2o.performance(test)
+gbm_grid@summary_table$model_ids[1] %>% h2o.getModel() %>% h2o.performance(test)
+h2o.performance(ensemble, test)
+
+```
+
+
+```{r}
+auto <- h2o.automl(x = X, 
+                   y = Y, 
+                   training_frame = train, 
+                   validation_frame = valid, 
+                   nfolds = 5, 
+                   seed = 2020, 
+                   keep_cross_validation_predictions = TRUE)
+
+auto
+
+h2o.performance(auto@leader, test)
+
+
+
+
+```
+
+
