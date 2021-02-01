@@ -28,4 +28,8 @@ observar si esa estrategia en un pasado hubiera tenido profit o perdidas, inclus
 
 http://clashroyalepredict.shinyapps.io/Trading_Forex
 
-Espero que les gusten!
+Si tienen interés en ver más aplicaciones de finanzas tipo la anterior, 
+tengo una más avanzada donde aplico deep learning, en concreto LSTMs o GRUs, para la predicción de FOREX. 
+Contacto privado: llorencnoguera@gmail.com
+
+También hago bots integrados con MetaTrader5.
