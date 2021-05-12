@@ -5,17 +5,13 @@ que van desde problemas de clasificación binaria, multiclase a problemas de reg
 
 En estos ejemplos trato de lidiar, además, con problemas de balanceo, outliers, missing values,...
 
-El lenguaje que uso es R donde empleo los paquetes de moda de Tidyverse como Caret, ggplot, dplyr, purrr, y compañia. 
+El lenguaje que uso es R donde empleo los paquetes de moda de Tidyverse, Caret, ggplot, dplyr, purrr, y compañia. 
 
 También me manejo con soltura con el paquete de H2o para datasets de más grandes.
 
-Finalmente para la parte de Deep Learning manejo Keras y tensorflow. 
+Finalmente para la parte de Deep Learning Keras y tensorflow. 
 
-Para el tema de dashboards dinámicos manejo PowerBI y Tableau. 
-
-Dejo este enlace de model deployment con PowerBI del documento de las series temporales. 
-
-https://app.powerbi.com/view?r=eyJrIjoiNzI0OTA4ZjEtZDE3Zi00NDJlLThlNDMtYmRkY2FmN2I1MzVhIiwidCI6IjcxYmIzNDU4LWQ3NWYtNDcxNi1hNWNiLTY0N2NkYWNiYzBhZiIsImMiOjh9&pageName=ReportSection
+Para el tema de dashboards dinámicos manejo PowerBI. 
 
 Adicionalmente he hecho esta shinyapp para los apasionados de Clash Royale, 
 donde aplico deep learning para predecir la probabilidad que tienes de ganar según tu mazo y el del contrario. Url de la app: 
