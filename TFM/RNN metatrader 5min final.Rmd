@@ -1,0 +1,1073 @@
+---
+title: "TFM"
+author: "Llorens Noguera"
+date: "5/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Carga de paquetes
+
+```{r warning=FALSE}
+set.seed(2020)
+# Modeling
+library(tensorflow)
+library(keras)
+library(caret)
+library(glmnet)
+
+# Core Tidyverse
+library(tidyverse)
+library(glue)
+library(forcats)
+
+# Time Series
+library(timetk)
+library(tidyquant)
+library(tibbletime)
+
+# hipotesis
+library(forecast)
+
+# Visualization
+library(cowplot)
+library(plotly)
+library(grid)
+library(gridExtra)
+
+# Preprocessing
+library(recipes)
+
+# Sampling / Accuracy
+library(rsample)
+library(yardstick) 
+
+# Modeling
+library(tfruns)
+
+# Install Keras if you have not installed before
+#install_keras()
+```
+
+Semilla de reproducibilidad
+
+```{r}
+tf$compat$v1$set_random_seed(seed = 2020)
+```
+
+Carga de ficheros
+
+```{r}
+EURUSD_intra <- read_tsv("EURUSD.c_M5.csv", col_names = TRUE)
+EURUSD_intra$`<DATE>` <- EURUSD_intra$`<DATE>` %>% as_date()
+EURUSD_intra$DATETIME <- paste(EURUSD_intra$`<DATE>`,EURUSD_intra$`<TIME>`,sep = " ") %>% as_datetime()
+names(EURUSD_intra) <- gsub("<", "", names(EURUSD_intra)) %>% gsub(">", "", .)
+
+GBPUSD_intra <- read_tsv("GBPUSD.c_M5.csv", col_names = TRUE)
+GBPUSD_intra$`<DATE>` <- GBPUSD_intra$`<DATE>` %>% as_date()
+GBPUSD_intra$DATETIME <- paste(GBPUSD_intra$`<DATE>`,GBPUSD_intra$`<TIME>`,sep = " ") %>% as_datetime()
+names(GBPUSD_intra) <- gsub("<", "", names(GBPUSD_intra)) %>% gsub(">", "", .)
+
+AUDUSD_intra <- read_tsv("AUDUSD.c_M5.csv", col_names = TRUE)
+AUDUSD_intra$`<DATE>` <- AUDUSD_intra$`<DATE>` %>% as_date()
+AUDUSD_intra$DATETIME <- paste(AUDUSD_intra$`<DATE>`,AUDUSD_intra$`<TIME>`,sep = " ") %>% as_datetime()
+names(AUDUSD_intra) <- gsub("<", "", names(AUDUSD_intra)) %>% gsub(">", "", .)
+
+USDSGD_intra <- read_tsv("USDSGD.c_M5.csv", col_names = TRUE)
+USDSGD_intra$`<DATE>` <- USDSGD_intra$`<DATE>` %>% as_date()
+USDSGD_intra$DATETIME <- paste(USDSGD_intra$`<DATE>`,USDSGD_intra$`<TIME>`,sep = " ") %>% as_datetime()
+names(USDSGD_intra) <- gsub("<", "", names(USDSGD_intra)) %>% gsub(">", "", .)
+```
+
+Manipulacion
+
+```{r}
+df <- dplyr::full_join(AUDUSD_intra, EURUSD_intra, by = "DATETIME", suffix = c(".AUDUSD", ".EURUSD"))
+df <- dplyr::full_join(df, GBPUSD_intra, by = "DATETIME", suffix = c(".df", ".GBPUSD"))
+df <- dplyr::full_join(df, USDSGD_intra, by = "DATETIME", suffix = c(".df", ".USDSGD"))
+```
+
+```{r}
+df <- df %>% select(DATETIME, contains("CLOSE"))
+names(df)[2:5] <- c("AUDUSD", "EURUSD", "GBPUSD", "SGDUSD")
+df$SGDUSD <- round(1/df$SGDUSD,digits = 5)
+df <- na.omit(df)
+rm(AUDUSD_intra, EURUSD_intra, GBPUSD_intra, USDSGD_intra)
+
+df <- df %>% 
+  tk_tbl() %>%
+  as_tbl_time(index = DATETIME)
+ 
+```
+
+contraste normalidad
+
+```{r}
+summary(df)
+
+jb_audusd <- normtest::jb.norm.test(as.ts(df$AUDUSD),nrepl = 3000)
+jb_eurusd <- normtest::jb.norm.test(as.ts(df$EURUSD),nrepl = 3000)
+jb_gbpusd <- normtest::jb.norm.test(as.ts(df$GBPUSD),nrepl = 3000)
+jb_sgdusd <- normtest::jb.norm.test(as.ts(df$SGDUSD),nrepl = 3000)
+
+c(jb_audusd$p.value, jb_eurusd$p.value, jb_gbpusd$p.value, jb_sgdusd$p.value)
+```
+
+kurotsis algo falla
+
+```{r}
+as.ts(df$AUDUSD, start = c(2015,1,15), end = c(2020,10,2), frequency = 288*365) %>%
+  DistributionUtils::kurtosis()
+
+kurtosis(df$AUDUSD)
+```
+
+Figura 1
+
+```{r}
+# Grafic treball
+df %>% 
+  rename('AUD/USD' = AUDUSD, 'EUR/USD' = EURUSD, 'GBP/USD' = GBPUSD, 'SGD/USD' = SGDUSD) %>%
+  pivot_longer(cols = -DATETIME, 
+               names_to = 'Var', 
+               values_to = 'Valor') %>% 
+  ggplot(data = ., aes(x =DATETIME, y = Valor))+
+  geom_line()+
+  geom_vline(mapping = aes(xintercept = as.POSIXct(as_date('2020-03-14'))),
+             linetype = 'dashed',
+             color = 'grey50')+
+  annotate('text',
+           label = 'Covid-19', 
+           x = as.POSIXct(as_date('2020-03-14')), 
+           y = 1.35,)+
+  facet_wrap(~Var,scales = 'free')+
+  scale_x_datetime(breaks = '1 month', 
+                   date_labels = "%b")+
+  ylab('Tipo de cambio')+
+  xlab('2020')+
+  theme_bw()+
+  theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(), 
+    strip.background = element_rect(fill = 'white', color = 'white'))
+  
+```
+
+Partición entrenamiento/prueba
+
+```{r}
+df_assesment <- df %>% mutate(year = year(DATETIME), month = month(DATETIME), day = day(DATETIME)) %>% filter(month %in% c(9,10)) %>% mutate(key = 'assesment')
+
+df_analysis <- df %>% mutate(year = year(DATETIME), month = month(DATETIME), day = day(DATETIME)) %>% filter(!month %in% c(9,10)) %>% mutate(key = 'analysis')
+```
+
+Observaciones por cada conjunto
+
+```{r}
+df %>% group_by(key) %>% count() %>% as.data.frame()
+df_analysis <- df_analysis[,c(1:5)]
+df_assesment <- df_assesment[,c(1:5)]
+```
+
+Particiones de validación cruzada
+
+```{r}
+periods_train <- 6431#15552    #54 dies
+periods_test  <- 3000#3645  # aprox 13
+skip_span     <- 9430#400 * 20
+
+rolling_origin_resamples <- rolling_origin(
+  df_analysis,
+  initial    = periods_train,
+  assess     = periods_test,
+  cumulative = FALSE,
+  skip       = skip_span
+)
+
+rolling_origin_resamples$splits[[5]]$out_id %>% tail
+```
+
+```{r}
+rolling_origin_resamples
+```
+
+Figura 2
+
+```{r}
+rolling_origin_resamples %>%
+  tk_time_series_cv_plan() %>%
+  mutate(.id = fct_recode(.f = .id,
+                          'Partición 1' = 'Slice1', 
+                          'Partición 2' = 'Slice2', 
+                          'Partición 3' = 'Slice3', 
+                          'Partición 4' = 'Slice4',
+                          'Partición 5' = 'Slice5'),
+         Conjunto = fct_recode(.f = .key,
+                           Entrenamiento = 'training',
+                           Prueba = 'testing')) %>%
+  ggplot()+
+  geom_line(aes(x = DATETIME, y = EURUSD, color = Conjunto))+
+  facet_grid(rows = vars(.id), scales = 'fixed')+
+  scale_x_datetime(breaks = '1 month', 
+                   date_labels = "%b")+
+  ylab('EUR/USD')+
+  xlab('2020')+
+  theme_bw()+
+  theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_rect(fill = 'white', color = 'white')) 
+```
+
+Generator function para el modelo LSTM
+
+```{r}
+# Cream generador de datos perque no deixarho dins memoria
+step <- 1
+lookback <- 12
+delay <- 1 
+batch_size <- 32
+n_features <- 4 # semplea mes envant
+
+generator <- function(data, lookback, delay, min_index, max_index,
+                      shuffle = FALSE, batch_size, step) {
+  if (is.null(max_index))
+    max_index <- nrow(data) - delay
+  i <- min_index + lookback
+  function() {
+    if (shuffle) {
+      rows <- sample(c((min_index+lookback):max_index), size = batch_size)
+    } else {
+      if (i + batch_size >= max_index)
+        i <<- min_index + lookback
+      rows <- c(i:min(i+batch_size-1, max_index))
+      i <<- i + length(rows)
+    }
+    
+    samples <- array(0, dim = c(length(rows),
+                                lookback / step,
+                                dim(data)[[-1]]))
+    targets <- array(0, dim = c(length(rows)))
+    
+    for (j in 1:length(rows)) {
+      indices <- seq(rows[[j]] - lookback, rows[[j]]-1,
+                     length.out = dim(samples)[[2]])
+      samples[j,,] <- data[indices,]
+      targets[[j]] <- data[rows[[j]] + delay,1] # indicar aqui sa columna target
+    }           
+    list(samples, targets)
+  }
+}
+```
+
+Funcion calcular el rmse
+
+```{r}
+calc_rmse <- function(df){
+  rmse(df,
+       truth = EURUSD,
+       estimate = pred,
+       na_rm = TRUE)
+}
+```
+
+Funcion para obtener las predicciones de validación cruzada
+
+```{r}
+obtain_predictions_grid <- function(split, optimizer_type, neurons, learning_rate) {
+  set.seed(2020)
+  df_trn <- analysis(split)[1:round((nrow(split)*0.7)), , drop = FALSE]
+  df_val <- analysis(split)[(round(nrow(split)*0.7+1)):(nrow(split)), , drop = FALSE]
+  df_tst <- assessment(split)
+  
+  df <- bind_rows(
+    df_trn %>% add_column(key = "training"),
+    df_val %>% add_column(key = "validation"),
+    df_tst %>% add_column(key = "testing")
+  ) %>%
+    as_tbl_time(index = DATETIME)
+
+  rec_obj <- recipe(EURUSD ~ ., df) %>%
+    step_log(all_numeric()) %>%
+    step_range(all_numeric(),min = -1, max = 1) %>%
+    prep()
+  
+  df_processed_tbl <- bake(rec_obj, df)
+
+  range_a <- rec_obj$steps[[2]]$min
+  range_b <- rec_obj$steps[[2]]$max
+  ranges_history <- rec_obj$steps[[2]]$ranges
+  
+  train_vals <- df_processed_tbl %>%
+    filter(key == "training") %>%
+    select(EURUSD, AUDUSD, GBPUSD, SGDUSD) %>%
+    as.matrix() %>%
+    generator(data = .,
+              lookback = lookback,
+              delay = delay,
+              min_index = 1,
+              max_index = NULL,
+              shuffle = FALSE,
+              batch_size = nrow(.),
+              step = step)
+  
+  valid_vals <- df_processed_tbl %>%
+    filter(key == "validation") %>%
+    select(EURUSD, AUDUSD, GBPUSD, SGDUSD) %>%
+    as.matrix() %>%
+    generator(data = .,
+              lookback = lookback,
+              delay = delay,
+              min_index = 1,
+              max_index = NULL,
+              shuffle = FALSE,
+              batch_size = nrow(.),
+              step = step)
+    
+  test_vals <- df_processed_tbl %>%
+    filter(key == "testing") %>%
+    select(EURUSD, AUDUSD, GBPUSD, SGDUSD) %>%
+    as.matrix() %>%
+    generator(data = .,
+              lookback = lookback,
+              delay = delay,
+              min_index = 1,
+              max_index = NULL,
+              shuffle = FALSE,
+              batch_size = nrow(.),
+              step = step)
+  
+  x_train <- train_vals()[[1]]
+  x_valid <- valid_vals()[[1]]
+  x_test <- test_vals()[[1]]
+  
+  y_train <- train_vals()[[2]]
+  y_valid <- valid_vals()[[2]]
+  y_test <- test_vals()[[2]]
+  
+  FLAGS <- flags(
+    flag_boolean("stateful", FALSE),
+    flag_boolean("stack_layers", TRUE),
+    flag_integer("batch_size", 32),
+    flag_integer("n_timesteps", lookback),
+    flag_integer("n_epochs", 50),
+    flag_numeric("dropout", 0.2),
+    flag_numeric("recurrent_dropout", 0.2),
+    flag_string("loss", "mse"),
+    flag_string("optimizer_type", optimizer_type),
+    flag_integer("n_units", neurons),
+    flag_numeric("lr", learning_rate),
+    flag_numeric("momentum", 0.9),
+    flag_integer("patience", 5)
+  )
+
+  optimizer <- switch(FLAGS$optimizer_type,
+                      sgd = optimizer_sgd(lr = FLAGS$lr, momentum = FLAGS$momentum),
+                      adam = optimizer_adam(lr = FLAGS$lr))
+  callbacks <- list(
+    callback_early_stopping(patience = FLAGS$patience, restore_best_weights = TRUE)
+  )
+  
+  model <- keras_model_sequential()
+
+  model %>%
+    layer_lstm(
+      units = FLAGS$n_units,
+      input_shape = c(NULL, FLAGS$n_timesteps, n_features),
+      dropout = FLAGS$dropout,
+      recurrent_dropout = FLAGS$recurrent_dropout,
+      return_sequences = TRUE,
+      stateful = FLAGS$stateful,
+      kernel_initializer=initializer_random_uniform(minval = -0.05, maxval = 0.05, seed = 2020)
+    ) 
+
+  if (FLAGS$stack_layers) {
+    model %>%
+      layer_lstm(
+        units = FLAGS$n_units,
+        dropout = FLAGS$dropout,
+        recurrent_dropout = FLAGS$recurrent_dropout,
+        return_sequences = FALSE,
+        stateful = FLAGS$stateful,
+        kernel_initializer=initializer_random_uniform(minval = -0.05, maxval = 0.05, seed = 2020)
+      )
+  }
+  model %>% layer_dense(units = 1)
+
+  model %>%
+    compile(
+      loss = FLAGS$loss,
+      optimizer = optimizer,
+      metrics = list("mean_squared_error")
+    )
+
+  if (!FLAGS$stateful) {
+    model %>% fit(
+      x          = x_train,
+      y          = y_train,
+      validation_data = list(x_valid, y_valid),
+      batch_size = FLAGS$batch_size,
+      epochs     = FLAGS$n_epochs,
+      callbacks = callbacks
+    )
+  
+  } else {
+    for (i in 1:FLAGS$n_epochs) {
+      model %>% fit(
+        x          = x_train,
+        y          = y_train,
+        validation_data = list(x_valid, y_valid),
+        callbacks = callbacks,
+        batch_size = FLAGS$batch_size,
+        epochs     = 1,
+        shuffle    = FALSE
+      )
+      model %>% reset_states()
+    }
+  }
+
+  if (FLAGS$stateful)
+    model %>% reset_states()
+
+    
+  pred_train <- model %>%
+    predict(x_train, batch_size = FLAGS$batch_size) %>%
+    .[, 1]
+  
+  # Retransform values
+  pred_train <- (pred_train-range_a)/(range_b-range_a)*(ranges_history[2,4]-ranges_history[1,4])+ranges_history[1,4] %>% exp()
+  compare_train <- df %>% filter(key == "training")
+  compare_train$pred <- c(rep(NA, length.out = (lookback+delay)),
+                          pred_train)
+  pred_valid <- model %>%
+    predict(x_valid, batch_size = FLAGS$batch_size) %>%
+    .[, 1]
+  
+  # Retransform values
+  pred_valid <- (pred_valid-range_a)/(range_b-range_a)*(ranges_history[2,4]-ranges_history[1,4])+ranges_history[1,4] %>% exp()
+  compare_valid <- df %>% filter(key == "validation")
+  compare_valid$pred <- c(rep(NA, length.out = (lookback+delay)),
+                          pred_valid)
+  
+  pred_test <- model %>%
+    predict(x_test, batch_size = FLAGS$batch_size) %>%
+    .[, 1]
+  
+  # Retransform values
+  pred_test <- (pred_test-range_a)/(range_b-range_a)*(ranges_history[2,4]-ranges_history[1,4])+ranges_history[1,4] %>% exp()
+  compare_test <- df %>% filter(key == "testing")
+  compare_test$pred <- c(rep(NA, length.out = (lookback+delay)),
+                          pred_test)
+  
+  return(list(train = compare_train,
+              valid = compare_valid,
+              test = compare_test))
+}
+```
+
+Definimos grid
+
+```{r}
+grid <- expand.grid(optimizer_type = c('adam', 'sgd'),
+                    neurons = c(16, 64, 256),
+                    learning_rate = c(0.01, 0.001))
+```
+
+Grid search
+
+```{r}
+for (i in 1:nrow(grid)){
+  lstm_mod <- rolling_origin_resamples %>% 
+    mutate(prediction = map(splits, obtain_predictions_grid, 
+                            optimizer_type = grid$optimizer_type[i],
+                            neurons = grid$neurons[i],
+                            learning_rate = grid$learning_rate[i]))
+  lstm_mod <- lstm_mod %>% 
+    mutate(train = map(prediction, pluck("train")),
+           valid = map(prediction, pluck('valid')),
+           test = map(prediction, pluck("test")))
+  lstm_mod$prediction <- NULL
+  saveRDS(lstm_mod, paste0("C:/Users/Llorens/Desktop/Varios/Master/TFM/", 'lstm_mod_', i, ".rds"))
+  rm(lstm_mod)
+  print(i)
+
+}
+```
+
+Cargamos las predicciones de cada modelo
+
+```{r}
+lstm_mod <- list()
+for (i in 1:12){
+  lstm_mod[[i]] <- readRDS(paste0('lstm_mod_', i, '.rds'))
+}
+```
+
+Aunamos todas las predicciones
+
+```{r}
+lstm_mod <- lstm_mod %>%
+  map(~.x %>% 
+        transmute(predictions = pmap(.l = list(train, valid, test, id),
+                                     .f = function(train, valid, test, slice){
+                                       train <- train %>% 
+                                         add_column(id = slice)
+                                       valid <- valid %>% 
+                                         add_column(id = slice)
+                                       test <- test %>%
+                                         add_column(id = slice)
+                                       bind_rows(train, valid, test)
+                                     })) %>%
+        flatten_df()
+  ) %>%
+  bind_rows(.id = 'Model') %>% 
+  mutate(Model = factor(Model,levels = c(1:12)),
+         key = factor(key, levels = c('training', 'validation', 'testing')))
+
+```
+
+Calculamos el rmse
+
+```{r}
+results_cv <- lstm_mod %>% 
+  group_by(Model, key, id) %>% 
+  nest(data = c(DATETIME,AUDUSD, EURUSD, GBPUSD, SGDUSD, pred)) %>%
+  mutate(RMSE = map(data, calc_rmse)) %>% 
+  unnest(RMSE) %>% 
+  select(-.metric, -.estimator) %>%
+  rename(RMSE = .estimate)
+```
+
+Tabla 3
+
+Resultados CV
+
+```{r}
+results_cv %>% 
+  filter(key == 'testing') %>% 
+  group_by(Model) %>% 
+  summarise(RMSE_mean = mean(RMSE)) %>%
+  bind_cols(Optimizer = grid$optimizer_type,
+            Neurons = grid$neurons, 
+            Learning_rate = grid$learning_rate) %>%
+  mutate(RMSE_mean = round(RMSE_mean, digits = 4)) %>%
+  arrange(RMSE_mean) 
+  
+```
+
+Figura 6
+
+```{r}
+results_cv %>% 
+  filter(key == 'testing') %>%
+  rename('Modelo' = Model) %>%
+  mutate(id = fct_recode(.f = id,
+                          'Particion 1' = 'Slice1', 
+                          'Particion 2' = 'Slice2', 
+                          'Particion 3' = 'Slice3', 
+                          'Particion 4' = 'Slice4',
+                          'Particion 5' = 'Slice5')) %>%
+  ggplot()+
+  geom_point(aes(x = Modelo, y = RMSE, color = Modelo))+
+  facet_grid(rows = vars(id), scales = 'fixed')+
+  theme_bw()+
+  theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_rect(fill = 'white', color = 'white')) 
+```
+
+Podria añadirse
+
+```{r}
+results_cv %>% 
+  filter(key == 'testing') %>%
+  ggplot()+
+  geom_boxplot(aes(x = Model, y = RMSE, fill = Model))+
+  theme_tq()+
+  labs(caption = 'Fuente: elaboración propia')+
+  ggtitle('Cross-Validation: por Modelo')+
+  theme_bw()+
+  theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_rect(fill = 'white', color = 'white')) 
+```
+
+Figura 7
+
+```{r}
+lstm_mod %>% 
+  rename('Modelo' = Model) %>%
+  ggplot()+
+  geom_line(aes(x = DATETIME, y = EURUSD, group = id), color = 'black')+
+  geom_line(data = . %>% filter(key == 'testing'), aes(x = DATETIME, y = pred, color = Modelo))+
+  theme_tq()+
+  scale_x_datetime(date_labels = '%b ', date_breaks = '1 month')+
+  theme_bw()+
+  theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_rect(fill = 'white', color = 'white'))+
+  xlab('2020')+
+  ylab('EUR/USD')
+
+```
+
+Funcion modelo final
+
+```{r}
+obtain_predictions_final <- function(df_analysis, df_assesment) {
+  set.seed(2020)
+  df_trn <- df_analysis %>% .[1:round((nrow(df_analysis)*0.7)),]
+  df_val <- df_analysis %>% .[(round(nrow(df_analysis)*0.7+1)):(nrow(df_analysis)),]
+  df_tst <- df_assesment
+  
+  df <- bind_rows(
+    df_trn %>% add_column(key = "training"),
+    df_val %>% add_column(key = "validation"),
+    df_tst %>% add_column(key = 'testing')) %>%
+    as_tbl_time(index = DATETIME)
+  
+  rec_obj <- recipe(EURUSD ~ ., df) %>%
+    step_log(all_numeric()) %>%
+    step_range(all_numeric(),min = -1, max = 1) %>%
+    prep()
+  
+  df_processed_tbl <- bake(rec_obj, df)
+
+  range_a <- rec_obj$steps[[2]]$min
+  range_b <- rec_obj$steps[[2]]$max
+  ranges_history <- rec_obj$steps[[2]]$ranges
+  
+  train_vals <- df_processed_tbl %>%
+    filter(key == "training") %>%
+    select(EURUSD, AUDUSD, GBPUSD, SGDUSD) %>%
+    as.matrix() %>%
+    generator(data = .,
+              lookback = lookback,
+              delay = delay,
+              min_index = 1,
+              max_index = NULL,
+              shuffle = FALSE,
+              batch_size = nrow(.),
+              step = step)
+  
+  valid_vals <- df_processed_tbl %>%
+    filter(key == "validation") %>%
+    select(EURUSD, AUDUSD, GBPUSD, SGDUSD) %>%
+    as.matrix() %>%
+    generator(data = .,
+              lookback = lookback,
+              delay = delay,
+              min_index = 1,
+              max_index = NULL,
+              shuffle = FALSE,
+              batch_size = nrow(.),
+              step = step)
+    
+  test_vals <- df_processed_tbl %>%
+    filter(key == "testing") %>%
+    select(EURUSD, AUDUSD, GBPUSD, SGDUSD) %>%
+    as.matrix() %>%
+    generator(data = .,
+              lookback = lookback,
+              delay = delay,
+              min_index = 1,
+              max_index = NULL,
+              shuffle = FALSE,
+              batch_size = nrow(.),
+              step = step)
+  
+  x_train <- train_vals()[[1]]
+  x_valid <- valid_vals()[[1]]
+  x_test <- test_vals()[[1]]
+  
+  y_train <- train_vals()[[2]]
+  y_valid <- valid_vals()[[2]]
+  y_test <- test_vals()[[2]]
+  
+  FLAGS <- flags(
+    flag_boolean("stateful", FALSE),
+    flag_boolean("stack_layers", TRUE),
+    flag_integer("batch_size", 32),
+    flag_integer("n_timesteps", lookback),
+    flag_integer("n_epochs", 50),
+    flag_numeric("dropout", 0.2),
+    flag_numeric("recurrent_dropout", 0.2),
+    flag_string("loss", "mse"),
+    flag_string("optimizer_type", "adam"),
+    flag_integer("n_units", 64),
+    flag_numeric("lr", 0.01),
+    flag_numeric("momentum", 0.9),
+    flag_integer("patience", 5)
+  )
+
+  optimizer <- switch(FLAGS$optimizer_type,
+                      sgd = optimizer_sgd(lr = FLAGS$lr, momentum = FLAGS$momentum),
+                      adam = optimizer_adam(lr = FLAGS$lr))
+  callbacks <- list(
+    callback_early_stopping(patience = FLAGS$patience, restore_best_weights = TRUE)
+  )
+  
+  model <- keras_model_sequential()
+
+  model %>%
+    layer_lstm(
+      units = FLAGS$n_units,
+      input_shape = c(NULL, FLAGS$n_timesteps, n_features),
+      dropout = FLAGS$dropout,
+      recurrent_dropout = FLAGS$recurrent_dropout,
+      return_sequences = TRUE,
+      stateful = FLAGS$stateful,
+      kernel_initializer=initializer_random_uniform(minval = -0.05, maxval = 0.05, seed = 2020)
+    ) 
+
+  if (FLAGS$stack_layers) {
+    model %>%
+      layer_lstm(
+        units = FLAGS$n_units,
+        dropout = FLAGS$dropout,
+        recurrent_dropout = FLAGS$recurrent_dropout,
+        return_sequences = FALSE,
+        stateful = FLAGS$stateful,
+        kernel_initializer=initializer_random_uniform(minval = -0.05, maxval = 0.05, seed = 2020)
+      )
+  }
+  model %>% layer_dense(units = 1)
+
+  model %>%
+    compile(
+      loss = FLAGS$loss,
+      optimizer = optimizer,
+      metrics = list("mean_squared_error")
+    )
+
+  if (!FLAGS$stateful) {
+    model %>% fit(
+      x          = x_train,
+      y          = y_train,
+      validation_data = list(x_valid, y_valid),
+      batch_size = FLAGS$batch_size,
+      epochs     = FLAGS$n_epochs,
+      callbacks = callbacks
+    )
+  
+  } else {
+    for (i in 1:FLAGS$n_epochs) {
+      model %>% fit(
+        x          = x_train,
+        y          = y_train,
+        validation_data = list(x_valid, y_valid),
+        callbacks = callbacks,
+        batch_size = FLAGS$batch_size,
+        epochs     = 1,
+        shuffle    = FALSE
+      )
+      model %>% reset_states()
+    }
+  }
+
+  if (FLAGS$stateful)
+    model %>% reset_states()
+
+    
+  pred_train <- model %>%
+    predict(x_train, batch_size = FLAGS$batch_size) %>%
+    .[, 1]
+  
+  # Retransform values
+  pred_train <- (pred_train-range_a)/(range_b-range_a)*(ranges_history[2,4]-ranges_history[1,4])+ranges_history[1,4] %>% exp()
+  compare_train <- df %>% filter(key == "training")
+  compare_train$pred <- c(rep(NA, length.out = (lookback+delay)),
+                          pred_train)
+  pred_valid <- model %>%
+    predict(x_valid, batch_size = FLAGS$batch_size) %>%
+    .[, 1]
+  
+  # Retransform values
+  pred_valid <- (pred_valid-range_a)/(range_b-range_a)*(ranges_history[2,4]-ranges_history[1,4])+ranges_history[1,4] %>% exp()
+  compare_valid <- df %>% filter(key == "validation")
+  compare_valid$pred <- c(rep(NA, length.out = (lookback+delay)),
+                          pred_valid)
+  
+  pred_test <- model %>%
+    predict(x_test, batch_size = FLAGS$batch_size) %>%
+    .[, 1]
+  
+  # Retransform values
+  pred_test <- (pred_test-range_a)/(range_b-range_a)*(ranges_history[2,4]-ranges_history[1,4])+ranges_history[1,4] %>% exp()
+  compare_test <- df %>% filter(key == "testing")
+  compare_test$pred <- c(rep(NA, length.out = (lookback+delay)),
+                          pred_test)
+  
+  return(list(train = compare_train,
+              valid = compare_valid,
+              test = compare_test))
+}
+```
+
+Predicciones modelo final LSTM
+
+```{r}
+lstm <- obtain_predictions_final(df_analysis, df_assesment)
+
+#write_rds(lstm, file = 'lstm_mod_final.rds')
+#lstm <- read_rds('lstm_mod_final.rds')
+```
+
+Funcion XGBOOST
+
+```{r}
+model_xgb <- function(df_analysis, df_assesment){
+  set.seed(2020)
+  df_analysis[,-1] <- log(df_analysis[,-1])
+  df_assesment[,-1] <- log(df_assesment[,-1])
+  
+  training <- df_analysis %>% 
+    .[1:round((nrow(df_analysis)*0.7)),] %>%
+    mutate(EURUSD = dplyr::lag(EURUSD, n = 1)) %>% 
+    na.omit() %>% 
+    as.data.frame()
+  
+  validation <- df_analysis %>% 
+    .[((round(nrow(df_analysis)*0.7)+1)):(nrow(df_analysis)),] %>%
+    mutate(EURUSD = dplyr::lag(EURUSD, n = 1)) %>% 
+    na.omit() %>% 
+    as.data.frame()
+  
+  testing <- df_assesment %>%
+    mutate(EURUSD = dplyr::lag(EURUSD, n = 1)) %>% 
+    na.omit() %>% 
+    as.data.frame()
+  
+  x_train <- training[,c(2,4,5)] %>% as.matrix()
+  y_train <- training[,3]
+  x_valid <- validation[,c(2,4,5)] %>% as.matrix()
+  y_valid <- validation[,3]
+  x_test <- testing[,c(2,4,5)] %>% as.matrix()
+  y_test <- testing[,3] 
+  
+  control <- caret::trainControl(method = 'none')
+  
+  grid <- expand.grid(nrounds = 1500,
+                      max_depth = 8,
+                      eta = 0.1,
+                      gamma = 0.001,
+                      colsample_bytree = 0.8,
+                      min_child_weight = 0.8,
+                      subsample = 0.8)
+  
+  fit <- train(x = x_train,
+               y = y_train,
+               method = 'xgbTree',
+               metric = 'rmse',
+               trControl = control,
+               tuneGrid = grid)
+  
+  y_pred_train <- predict(fit, x_train) %>% exp()
+  y_pred_valid <- predict(fit, x_valid) %>% exp()
+  y_pred_test <- predict(fit, x_test) %>% exp()
+  
+  train <- df_analysis %>% 
+    .[1:round((nrow(df_analysis)*0.7)),]
+  train[,-1] <- exp(train[,-1])
+  
+  valid <- df_analysis %>% 
+    .[((round(nrow(df_analysis)*0.7)+1)):(nrow(df_analysis)),]
+  valid[,-1] <- exp(valid[,-1])
+  
+  test <- df_assesment
+  test[,-1] <- exp(test[,-1])
+  
+  train$pred <- c(NA, y_pred_train) 
+  valid$pred <- c(NA, y_pred_valid)
+  test$pred <- c(NA,y_pred_test)
+  
+  return(list(train = train,
+              valid = valid,
+              test = test))
+}
+```
+
+Predicciones XGBOOST
+
+```{r}
+xgb <- model_xgb(df_analysis, df_assesment)
+```
+
+Funcion GLMNET
+
+```{r}
+model_enet <- function(df_analysis, df_assesment){
+  set.seed(2020)
+  
+  df_analysis[,-1] <- log(df_analysis[,-1])
+  df_assesment[,-1] <- log(df_assesment[,-1])
+  
+  training <- df_analysis %>% 
+    .[1:round((nrow(df_analysis)*0.7)),] %>%
+    mutate(EURUSD = dplyr::lag(EURUSD, n = 1)) %>% 
+    na.omit() %>% 
+    as.data.frame()
+  
+  validation <- df_analysis %>% 
+    .[((round(nrow(df_analysis)*0.7)+1)):(nrow(df_analysis)),] %>%
+    mutate(EURUSD = dplyr::lag(EURUSD, n = 1)) %>% 
+    na.omit() %>% 
+    as.data.frame()
+  
+  testing <- df_assesment %>%
+    mutate(EURUSD = dplyr::lag(EURUSD, n = 1)) %>% 
+    na.omit() %>% 
+    as.data.frame()
+  
+  x_train <- training[,c(2,4,5)] %>% as.matrix()
+  y_train <- training[,3]
+  x_valid <- validation[,c(2,4,5)] %>% as.matrix()
+  y_valid <- validation[,3]
+  x_test <- testing[,c(2,4,5)] %>% as.matrix()
+  y_test <- testing[,3] 
+  
+  fit <- glmnet(x = x_train,
+                y = y_train,
+                alpha = 0.5)
+
+  y_pred_train <- predict(fit, x_train)[,72] %>% exp()
+  y_pred_valid <- predict(fit, x_valid)[,72] %>% exp()
+  y_pred_test <- predict(fit, x_test)[,72] %>% exp()
+  
+  train <- df_analysis %>% 
+    .[1:round((nrow(df_analysis)*0.7)),]
+  train[,-1] <- exp(train[,-1])
+  
+  valid <- df_analysis %>% 
+    .[((round(nrow(df_analysis)*0.7)+1)):(nrow(df_analysis)),]
+  valid[,-1] <- exp(valid[,-1])
+  
+  test <- df_assesment
+  test[,-1] <- exp(test[,-1])
+  
+  train$pred <- c(NA, y_pred_train) 
+  valid$pred <- c(NA, y_pred_valid)
+  test$pred <- c(NA,y_pred_test)
+  
+  return(list(train = train,
+              valid = valid,
+              test = test))
+}
+```
+
+Predicciones GLMNET
+
+```{r}
+enet <- model_enet(df_analysis, df_assesment)
+```
+
+Tabla 4
+
+```{r}
+sumario_test <- list(lstm, xgb, enet) %>% 
+  map(~.x %>% bind_rows(.id = 'key')) %>% 
+  bind_rows(.id = 'Model') %>%
+  mutate(Model = factor(Model)) %>%
+  group_by(Model, key) %>%
+  summarise(calc_rmse(.)) %>%
+  unique() %>%
+  select(-.metric, -.estimator) %>% 
+  mutate(.estimate = round(.estimate, digits = 4)) %>%
+  pivot_wider(names_from = key, values_from = .estimate) %>%
+  .[,c(1,3,4,2)] %>%
+  rename(Train = train, Valid = valid, Test = test) %>%
+  mutate(Model = factor(Model, c(1:3), c('Lstm', 'Xgboost', 'Elasticnet'))) %>%
+  ungroup()
+
+residuos_modelos_test <- lstm$test %>%
+  mutate(pred_lstm = pred,
+         pred_xgb = xgb$test$pred,
+         pred_enet = enet$test$pred,
+         pred = NULL) %>%
+  na.omit() %>%
+  transmute(e1 = EURUSD-pred_lstm,
+            e2 = EURUSD-pred_xgb,
+            e3 = EURUSD-pred_enet) 
+
+sumario_test$P_value <- '-'
+sumario_test$P_value[2] <- dm.test(e1 = residuos_modelos_test$e1,
+                                  e2 = residuos_modelos_test$e2,
+                                  alternative = 'less',
+                                  h = 1, 
+                                  power = 2)[[4]]
+sumario_test$P_value[3] <- dm.test(e1 = residuos_modelos_test$e1,
+                                  e2 = residuos_modelos_test$e3,
+                                  alternative = 'less',
+                                  h = 1, 
+                                  power = 2)[[4]]
+  
+sumario_test
+```
+
+Figura 8 y anexos
+
+```{r}
+gg_lstm <- lstm %>% 
+    bind_rows(.id = 'key') %>%
+    mutate(conjunto = factor(key, levels = c('train', 'valid', 'test'), labels = c('Entrenamiento', 'Validacion', 'Prueba'))) %>%
+    ggplot()+
+    geom_line(aes(x = DATETIME, y = EURUSD), color = 'black')+
+    geom_line(aes(x = DATETIME, y = pred, color = conjunto))+
+  ylab('EUR/USD')+
+  xlab('2020')+
+  theme_bw()+
+  theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_rect(fill = 'white', color = 'white'))
+
+gg_xgb <- xgb %>% 
+    bind_rows(.id = 'key') %>%
+    mutate(conjunto = factor(key, levels = c('train', 'valid', 'test'), labels = c('Entrenamiento', 'Validacion', 'Prueba'))) %>%
+    ggplot()+
+    geom_line(aes(x = DATETIME, y = EURUSD), color = 'black')+
+    geom_line(aes(x = DATETIME, y = pred, color = conjunto))+
+  ylab('Tipo de cambio')+
+  xlab('2020')+
+  theme_bw()+
+  theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_rect(fill = 'white', color = 'white'))
+
+gg_enet <- enet %>% 
+    bind_rows(.id = 'key') %>%
+    mutate(conjunto = factor(key, levels = c('train', 'valid', 'test'), labels = c('Entrenamiento', 'Validacion', 'Prueba'))) %>%
+    ggplot()+
+    geom_line(aes(x = DATETIME, y = EURUSD), color = 'black')+
+    geom_line(aes(x = DATETIME, y = pred, color = conjunto))+
+  ylab('Tipo de cambio')+
+  xlab('2020')+
+ theme_bw()+
+  theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_rect(fill = 'white', color = 'white'))
+
+```
+
+
+
+
+
+
