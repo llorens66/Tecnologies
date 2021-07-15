@@ -13,6 +13,14 @@ Finalmente para la parte de Deep Learning Keras y tensorflow.
 
 Para el tema de dashboards dinámicos manejo PowerBI. 
 
+Enlace al dashboard en power bi de la solucion final de la competicion nacional en la que participé:
+
+https://app.powerbi.com/view?r=eyJrIjoiNmU0ZmYwOGYtZDFlZi00ZTFlLWI0ZDktNTQyZjdiNzJmNTM5IiwidCI6IjcxYmIzNDU4LWQ3NWYtNDcxNi1hNWNiLTY0N2NkYWNiYzBhZiIsImMiOjh9&pageName=ReportSection
+
+Información sobre la competición:
+
+https://www.cajamardatalab.com/datathon-cajamar-universityhack-2021/retos/predictivo/
+
 Adicionalmente he hecho esta shinyapp para los apasionados de Clash Royale, 
 donde aplico deep learning para predecir la probabilidad que tienes de ganar según tu mazo y el del contrario. Url de la app: 
 
