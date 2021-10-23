@@ -25,7 +25,7 @@
 # No garantiza resultados, invierta su capital asumiendo
 # su propio riesgo.
 
-ruta_carpeta <- "C:/Users/llore/OneDrive/Escritorio/Varios/Varios/R studio coses/MT5/crypto_bot"
+ruta_carpeta <- "C:/Users/llore/OneDrive/Documentos/github/Tecnologies/Binance - Bot - Free"
 setwd(ruta_carpeta)
 set.seed(2021)
 options(scipen = 999)
@@ -55,7 +55,7 @@ binance <- import("binance", convert = F)
 
 # ----3.Credenciales----
 
-requierements <- read_delim("requierements.txt", delim = ",", col_names = F)
+requierements <- read_delim("requierements_example.txt", delim = ",", col_names = F)
 client <- binance$Client(as.character(requierements[1,]), as.character(requierements[2,]))
 
 # ----4.Parametros bot----
