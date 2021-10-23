@@ -5,7 +5,7 @@ que van desde problemas de clasificación binaria, multiclase a problemas de reg
 
 En estos ejemplos trato de lidiar, además, con problemas de balanceo, outliers, missing values,...
 
-El lenguaje que uso es R donde empleo los paquetes de moda de Tidyverse, Caret, ggplot, dplyr, purrr, y compañia. 
+El lenguaje que uso es R donde empleo los paquetes de moda de Tidyverse, Tidymodels, Modeltime, ggplot, dplyr, purrr, y compañia. 
 
 También me manejo con soltura con el paquete de H2o para datasets de más grandes.
 
@@ -31,6 +31,10 @@ Te permite elegir los pares (EUR/USD, EUR/GBP, ...), la frecuencia de las observ
 observar si esa estrategia en un pasado hubiera tenido profit o perdidas, incluso si añadimos un coste por cada trade realizado.
 
 http://clashroyalepredict.shinyapps.io/Trading_Forex
+
+Para los interesados en cripto monedas, ver el repositorio 'Binance - Bot - Free' donde he programado un bot que interactua con la api de
+Binance. Este Bot compra y vende criptomonedas automáticamente cuando se ejecutan unos trigers basados en unos indicadores. 
+Es totalmente gratuito y listo para ejecutar. Solo se necesita introducir sus claves api de binance. 
 
 Si tienen interés en ver más aplicaciones de finanzas tipo la anterior, 
 tengo una más avanzada donde aplico deep learning, en concreto LSTMs o GRUs, para la predicción de FOREX. 
