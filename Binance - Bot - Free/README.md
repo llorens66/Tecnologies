@@ -18,4 +18,12 @@ la frecuencia deseada. 30 minutos es óptima.
 Se puede ajustar la frecuencia, stop loss, take profit, los indicadores y
 los demás parámetros establecidos.
 
+Para más info:
+
+llorencnoguera@gmail.com
+
+No me hago responsable del uso de este programa. Esta hecho, con la 
+mera intención de aprendizaje y no garantiza beneficios. Asuma su propio
+riesgo cuando lo use. 
+
 
