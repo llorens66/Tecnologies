@@ -13,7 +13,7 @@ Loss o Take profit ejecuta ordenes de venta de mercado.
 El bot solo necesita establecer el directorio donde se va a guardar,
 las claves de la api de binance y programarlo con el administrador de 
 tareas de windows o crontab de mac que se ejecute cada 30 min o según 
-la frecuencia deseada. 30 minutos es óptima.
+la frecuencia deseada. 15 minutos es óptima.
 
 Se puede ajustar la frecuencia, stop loss, take profit, los indicadores y
 los demás parámetros establecidos.
