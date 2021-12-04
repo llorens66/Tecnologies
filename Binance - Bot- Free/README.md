@@ -26,4 +26,29 @@ No me hago responsable del uso de este programa. Esta hecho, con la
 mera intención de aprendizaje y no garantiza beneficios. Asuma su propio
 riesgo cuando lo use. 
 
+--------------
+
+Repository for bot integrated with the Bianance API.
+
+Uses Reticulate for the interaction with the python Binance API.
+
+The bot executes buy market orders when there is a signal, which is based in
+a combination of the Stochastic, RSI and MACD.
+
+When the asset broke either the Stop Loss limit or Take profit limit
+executes the sell market order.
+
+The bot only needs to know the directory where it will work, 
+the Binance API key and set it up with the task scheduler or crontab 
+to start the job with the desired frecuency. 15 min is fine.
+
+You can edit all the parameters and customize it like the stop loss,
+take profit, indicators, ...
+
+More info:
+llorencnoguera@gmail.com
+
+Disclaimer: I am not responsible of the use of this bot. It's for 
+educational purproses and doesn't guarantee profits. Asume your own risk.
+
 
